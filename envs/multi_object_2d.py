@@ -236,17 +236,17 @@ class Env():
 
         return mat
 
-    def save_frame(self):
+    def save_frame(self, name):
         mat = self.render()
-
-        img = Image.from_numpy(mat)
+        img = Image.from_numpy(np.uint8(mat))
+        img.save(name)
 
 class OneSphereEnv(Env):
     """
     Environment with just one moving red sphere.
 
     The sphere is initialized at the center.
-    It dosn't move out of the FoV.
+    It doesn't move out of the FoV.
     """
     def __init__(self):
         
@@ -268,3 +268,24 @@ if __name__ == '__main__':
     env = OneSphereEnv()
     pygame.init()
     done = False
+
+    X = env.L
+    Y = env.L
+
+    framename = 'frame.jpg'
+    env.save_frame(framename)
+    display = pygame.display.set_mode((X, Y))
+    pygame.display.set_caption('Movement test')
+
+    while not done:
+        display.fill((0, 0, 0))
+        display.blit(pygame.image.load(framename), (0, 0))
+        pygame.display.update()
+
+        events = pygame.event.get()
+        for event in events:
+            if event.key in [pygame.K_ESCAPE, pygame.Q]:
+                    done = True
+
+        env.save_frame(framename)
+    pygame.quit()
