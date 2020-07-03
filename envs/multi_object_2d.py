@@ -8,6 +8,8 @@ import numpy as np
 import time
 import pygame
 
+from PIL import Image
+
 COLOR_NAMES = ['red', 'blue', 'green', 'yellow', 'purple']
 COLORS = {
     'red': (1., 0.1, 0.1),
@@ -16,6 +18,7 @@ COLORS = {
     'yellow': (1., 1., 0.1),
     'purple': (1., 0.1, 1.)
 }
+PI = np.pi
 
 ### Shape definitions
 
@@ -51,10 +54,12 @@ class Shape():
 
         # movement attributes
         self.moves = False
-        self.x_range = np.zeros(2)
-        self.y_range = np.zeros(2)
+        self.x_amp = 0.
+        self.y_amp = 0.
         self.x_freq = 1.
         self.y_freq = 1.
+        self.x_phase = 0.
+        self.y_phase = PI / 2
 
         # concrete atributes
         self.cond = NotImplemented
@@ -190,18 +195,29 @@ class Env():
 
         self.time = 0.
 
-    def render(self, show=True, mode='fixed'):
+    def render(self):
         """
         Renders the environment, returns a rasterized image as a numpy array.
         """
         L = self.L
         mat = np.zeros((L, L, 3))
         l = self.L
+
         for obj in self.objects:
             obj_mat = obj.to_pixels(self.gridsize)
             s = len(obj_mat) # size of object in pixel space
+
+            # base x and y pos
             ox, oy = ((self.gridsize * obj.pos) - int(s/2)).astype(int)
+            # compute x and y deviation due to movement
+            xm = obj.x_amp * np.sin(obj.x_freq * self.time + obj.x_phase)
+            ym = obj.y_amp * np.sin(obj.y_freq * self.time + obj.y_phase)
+
+            ox += xm
+            oy += ym
+
             obj_mat = obj_mat[..., :] * np.expand_dims(obj_mat[..., 3], -1)
+            
             # indices
             xmin = max(ox, 0)
             xmax = max(ox + s, 0)
@@ -211,17 +227,44 @@ class Env():
             xmaxobj = max(L - ox, 0)
             yminobj = max(-oy, 0)
             ymaxobj = max(L - oy, 0)
+            
             mat[xmin:xmax, ymin:ymax] = overlay(
                 mat[xmin:xmax, ymin:ymax],
                 obj_mat[xminobj:xmaxobj, yminobj:ymaxobj])
+        
         mat = np.flip(mat, axis=0)
-        mat = mat.astype(int)
-        if show:
-            plt.imshow(mat)
-            plt.show()
+
         return mat
+
+    def save_frame(self):
+        mat = self.render()
+
+        img = Image.from_numpy(mat)
 
 class OneSphereEnv(Env):
     """
-    Environment with just one moving sphere.
+    Environment with just one moving red sphere.
+
+    The sphere is initialized at the center.
+    It dosn't move out of the FoV.
     """
+    def __init__(self):
+        
+        super().__init__(16, 20)
+
+        c = Circle(2, COLORS['red'], (8, 8), 0.)
+        c.x_amp = 6.
+        c.y_amp = 6.
+        c.x_freq = 2 * PI / 5.
+        c.y_freq = 2 * PI / 10.
+        c.y_phase = PI / 2
+
+        self.objects.append(c)
+
+### Testing environments
+
+if __name__ == '__main__':
+
+    env = OneSphereEnv()
+    pygame.init()
+    done = False
