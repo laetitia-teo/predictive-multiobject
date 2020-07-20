@@ -3,11 +3,14 @@ This file defines the 2d environment with moving objects.
 
 At first, the env can contain up to 5 objects of different colors.
 """
+import os.path as op
 import numpy as np
 
 import time
 import pygame
 
+from pathlib import Path
+from tqdm import tqdm
 from PIL import Image
 
 COLOR_NAMES = ['red', 'blue', 'green', 'yellow', 'purple']
@@ -60,6 +63,7 @@ class Shape():
         self.y_freq = 1.
         self.x_phase = 0.
         self.y_phase = PI / 2
+        self.center = 0.
 
         # concrete atributes
         self.cond = NotImplemented
@@ -208,7 +212,7 @@ class Env():
             s = len(obj_mat) # size of object in pixel space
 
             # base x and y pos
-            ox, oy = ((self.gridsize * obj.pos) - int(s/2)).astype(int)
+            ox, oy = ((self.gridsize * obj.pos)).astype(int)
             # compute x and y deviation due to movement
             xm = obj.x_amp * np.sin(obj.x_freq * self.time + obj.x_phase)
             ym = obj.y_amp * np.sin(obj.y_freq * self.time + obj.y_phase)
@@ -219,14 +223,14 @@ class Env():
             obj_mat = obj_mat[..., :] * np.expand_dims(obj_mat[..., 3], -1)
             
             # indices
-            xmin = max(ox, 0)
-            xmax = max(ox + s, 0)
-            ymin = max(oy, 0)
-            ymax = max(oy + s, 0)
-            xminobj = max(-ox, 0)
-            xmaxobj = max(L - ox, 0)
-            yminobj = max(-oy, 0)
-            ymaxobj = max(L - oy, 0)
+            xmin = int(max(ox, 0))
+            xmax = int(max(ox + s, 0))
+            ymin = int(max(oy, 0))
+            ymax = int(max(oy + s, 0))
+            xminobj = int(max(-ox, 0))
+            xmaxobj = int(max(L - ox, 0))
+            yminobj = int(max(-oy, 0))
+            ymaxobj = int(max(L - oy, 0))
             
             mat[xmin:xmax, ymin:ymax] = overlay(
                 mat[xmin:xmax, ymin:ymax],
@@ -237,9 +241,21 @@ class Env():
         return mat
 
     def save_frame(self, name):
-        mat = self.render()
-        img = Image.from_numpy(np.uint8(mat))
+        mat = self.render() * 255
+        img = Image.fromarray(np.uint8(mat))
         img.save(name)
+
+    def make_dataset(self, dt, N, path):
+        # test ? We just train for now ?
+        Path(path).mkdir(parents=True, exist_ok=True)
+        t = 0.
+
+        for i in tqdm(range(N)):
+            t = t + dt
+            self.time = t
+            self.save_frame(op.join(path, f"frame{i}.png"))
+
+# environment instances
 
 class OneSphereEnv(Env):
     """
@@ -250,32 +266,63 @@ class OneSphereEnv(Env):
     """
     def __init__(self):
         
-        super().__init__(16, 20)
+        super().__init__(5, 20)
 
         c = Circle(2, COLORS['red'], (8, 8), 0.)
-        c.x_amp = 6.
-        c.y_amp = 6.
+        c.x_amp = 6. * self.gridsize
+        c.y_amp = 6. * self.gridsize
         c.x_freq = 2 * PI / 5.
-        c.y_freq = 2 * PI / 10.
+        c.y_freq = 2 * PI / 13.
         c.y_phase = PI / 2
 
         self.objects.append(c)
+
+class TwoSphereEnv(Env):
+    """
+    Environment with just two moving spheres: one big and red, the other small
+    and blue.
+
+    The spheres don't move out of the FoV. The small one may cover the big one.
+    """
+    def __init__(self):
+
+        super().__init__(5, 20)
+
+        c1 = Circle(2, COLORS['red'], (8, 8), 0.)
+        c1.x_amp = 6. * self.gridsize
+        c1.y_amp = 6. * self.gridsize
+        c1.x_freq = 2 * PI / 5.
+        c1.y_freq = 2 * PI / 13.
+        c1.y_phase = PI / 2
+        self.objects.append(c1)
+
+        c2 = Circle(0.5, COLORS['blue'], (8, 8), 0.)
+        c2.x_amp = 6. * self.gridsize
+        c2.y_amp = 6. * self.gridsize
+        c2.x_freq = 2 * PI / 7.
+        c2.y_freq = 2 * PI / 7.
+        c2.x_phase = PI / 2
+        self.objects.append(c2)
 
 ### Testing environments
 
 if __name__ == '__main__':
 
-    env = OneSphereEnv()
+    # env = OneSphereEnv()
+    env = TwoSphereEnv()
     pygame.init()
     done = False
 
     X = env.L
     Y = env.L
+    dt = 1 / 30 # fps
 
     framename = 'frame.jpg'
     env.save_frame(framename)
     display = pygame.display.set_mode((X, Y))
     pygame.display.set_caption('Movement test')
+
+    t0 = time.time()
 
     while not done:
         display.fill((0, 0, 0))
@@ -284,8 +331,17 @@ if __name__ == '__main__':
 
         events = pygame.event.get()
         for event in events:
-            if event.key in [pygame.K_ESCAPE, pygame.Q]:
-                    done = True
+            if event.type == pygame.KEYDOWN:
+                if event.key in [pygame.K_ESCAPE, pygame.K_q]:
+                        done = True
 
+        # update env
+        t = time.time() - t0
+        env.time = t
         env.save_frame(framename)
+
+        # cap the time interval
+        t1 = time.time() - t0
+        if (t1 - t) < dt:
+            time.sleep(dt - (t1 - t))
     pygame.quit()
