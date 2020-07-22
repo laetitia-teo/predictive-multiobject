@@ -175,3 +175,58 @@ class SelfAttentionLSTM_GNN(torch.nn.Module):
         self.register_buffer('H', H)
 
         return H
+
+### Slot-distance functions
+
+class L2Dist(torch.nn.Module):
+    """
+    Simple slot-wise L2 distance.
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, z, m):
+        return (z - m)**2
+
+class NegativeCosSim(torch.nn.Module):
+    """
+    Slot-wise negative cosine similarity.
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, z, m):
+        # z, m :: [B, N, F]
+        # TODO check this
+        B, N, F = z.shape
+        normz = z**2.sum(-1).unsqueeze(-1)
+        normm = m**2.sum(-1).unsqueeze(-1)
+
+        dot = z.view([B, N, 1, F]) @ m.view([B, N, F, 1])
+        return dot.squeeze(-1) / (normz * normm)
+
+class MatchDistance(torch.nn.Module):
+    """
+    This module defines a matching procedure between the two given slot-based
+    elements: First a compatibility score is computed between all vectors and
+    constrained to be positive and sum to 1 on all destination vectors.
+    These compatibility scores are then used as the parameters of a Bernoulli
+    over each pair of vectors, which is then sampled to match vectors. The
+    constraint implements a form of competition between vectors of the second
+    input.
+    The distance computation is then made according to those created matchings.
+    """
+    def __init__(self, Fin, Fqk):
+        # note: no heads, maybe add ?
+        # sparse implem for dealing with sparse edges ?
+        self.Fin = Fin
+        self.Fqk = Fqk
+        self.Ftot = 2 * Fqk
+
+        self.proj = Linear(Fin, self.Ftot, bias=False)
+
+    def forward(self, z, m):
+        B, Nz, F = z.shape
+        _, Nm, _ = m.shape
+        # compute q and k separately (?)
+        q, k = self.proj()
