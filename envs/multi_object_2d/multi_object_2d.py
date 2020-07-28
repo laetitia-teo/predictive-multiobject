@@ -4,6 +4,7 @@ This file defines the 2d environment with moving objects.
 At first, the env can contain up to 5 objects of different colors.
 """
 import os.path as op
+import json
 import numpy as np
 
 import time
@@ -21,7 +22,9 @@ COLORS = {
     'yellow': (1., 1., 0.1),
     'purple': (1., 0.1, 1.)
 }
+
 PI = np.pi
+TAU = 2 * PI
 
 ### Shape definitions
 
@@ -199,6 +202,8 @@ class Env():
 
         self.time = 0.
 
+        self.env_params = {}
+
     def render(self):
         """
         Renders the environment, returns a rasterized image as a numpy array.
@@ -240,20 +245,44 @@ class Env():
 
         return mat
 
+    def reset_time(self):
+        self.time = 0.
+
     def save_frame(self, name):
         mat = self.render() * 255
         img = Image.fromarray(np.uint8(mat))
         img.save(name)
 
-    def make_dataset(self, dt, N, path):
+    def make_dataset(self, dt, N, path, prefix=''):
         # test ? We just train for now ?
         Path(path).mkdir(parents=True, exist_ok=True)
         t = 0.
 
-        for i in tqdm(range(N)):
+        for i in range(N):
             t = t + dt
             self.time = t
-            self.save_frame(op.join(path, f"frame{i}.png"))
+            self.save_frame(op.join(path, f"{prefix}frame{i}.png"))
+
+        # return env params as json string
+        return json.dumps(self.env_params)
+
+    def get_frame_at_time(self, t):
+        """
+        Returns the array image of the env at time t.
+        """
+        mem = self.time
+        self.time = t
+        mat = self.render()
+        self.time = mem
+        return mat
+
+    # @static_method
+    # def from_params(self, param_dict):
+    #     """
+    #     Builds an Env instance from the passes param_dict.
+    #     """
+    #     # TODO complete.
+    #     ...
 
 # environment instances
 
@@ -271,11 +300,14 @@ class OneSphereEnv(Env):
         c = Circle(2, COLORS['red'], (8, 8), 0.)
         c.x_amp = 6. * self.gridsize
         c.y_amp = 6. * self.gridsize
-        c.x_freq = 2 * PI / 5.
-        c.y_freq = 2 * PI / 13.
+        c.x_freq = TAU / 5.
+        c.y_freq = TAU / 13.
         c.y_phase = PI / 2
 
         self.objects.append(c)
+
+    def reset_params(self):
+        pass
 
 class TwoSphereEnv(Env):
     """
@@ -288,21 +320,61 @@ class TwoSphereEnv(Env):
 
         super().__init__(5, 20)
 
+        self.reset_params()
+
+    def reset_params(self):
+        # sample parameters for the environment
+        x_freq = np.random.random(2) * TAU
+        y_freq = np.random.random(2) * TAU
+        x_phase = np.random.random(2) * TAU
+        y_phase = np.random.random(2) * TAU
+        x_amp = 6.
+        y_amp = 6.
+
+        # register params
+        self.env_params['type'] = "TwoSphereEnv"
+        self.env_params['x_freq'] = list(x_freq)
+        self.env_params['y_freq'] = list(y_freq)
+        self.env_params['x_phase'] = list(x_phase)
+        self.env_params['y_phase'] = list(y_phase)
+        self.env_params['x_amp'] = x_amp
+        self.env_params['y_amp'] = y_amp
+
+        # reset objects
+        self.objects = []
+
         c1 = Circle(2, COLORS['red'], (8, 8), 0.)
-        c1.x_amp = 6. * self.gridsize
-        c1.y_amp = 6. * self.gridsize
-        c1.x_freq = 2 * PI / 5.
-        c1.y_freq = 2 * PI / 13.
-        c1.y_phase = PI / 2
+        c1.x_amp = x_amp * self.gridsize
+        c1.y_amp = y_amp * self.gridsize
+        c1.x_freq = x_freq[0]
+        c1.y_freq = y_freq[0]
+        c1.x_phase = x_phase[0]
+        c1.y_phase = y_phase[0]
         self.objects.append(c1)
 
         c2 = Circle(0.5, COLORS['blue'], (8, 8), 0.)
-        c2.x_amp = 6. * self.gridsize
-        c2.y_amp = 6. * self.gridsize
-        c2.x_freq = 2 * PI / 7.
-        c2.y_freq = 2 * PI / 7.
-        c2.x_phase = PI / 2
+        c2.x_amp = x_amp * self.gridsize
+        c2.y_amp = y_amp * self.gridsize
+        c2.x_freq = x_freq[1]
+        c2.y_freq = y_freq[1]
+        c2.x_phase = x_phase[1]
+        c2.y_phase = y_phase[1]
         self.objects.append(c2)
+
+### Generating datasets
+
+def generate(env_type, N_samples, T, dt, path):
+    
+    paramlist = []
+
+    env = env_type()
+    
+    for n in tqdm(range(N_samples)):
+        paramlist.append(env.make_dataset(dt, T, path, prefix=f"sample{n}"))
+        env.reset_params()
+
+    with open(op.join(path, "envparams.txt"), 'w') as f:
+        f.write("\n".join(paramlist))
 
 ### Testing environments
 

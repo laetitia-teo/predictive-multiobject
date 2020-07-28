@@ -208,7 +208,7 @@ class AttentionLayerSparse(torch.nn.Module):
 
         qs, ks = q[src], k[dest]
         # dot product
-        aw = qs.view(-1, 1, self.Fqk) @ ks.view(-1 self.Fqk, 1)
+        aw = qs.view(-1, 1, self.Fqk) @ ks.view(-1, self.Fqk, 1)
         aw = aw.squeeze()
         # softmax reduction
         aw = scatter_softmax(aw, src)
@@ -257,33 +257,49 @@ class SelfAttentionLSTM_GNN(torch.nn.Module):
     """
     A GNN where the edge model + edge aggreg is a self-attention layer.
     There are K hidden states and cells, each corresponding to a particular
-    memory slot. The LSTN parameters are shared between all slots.
+    memory slot. The LSTM parameters are shared between all slots.
 
     Dense implem (should we call this a GNN ?)
 
     We have two choices for what vectors we use for the self-attention update:
     hidden vectors of cells. We'll use cells here, but that may not be the best
     choice.
+
+    The model only does one forward pass on the sequence.
+
+    Arguments:
+        - B: batch size, must be specified in advance;
+        - K: number of memory slots;
+        - Fmem: number of features of each slot;
+        - nheads: number of heads in the self-attention mechanism;
+        - gating: can one of "slot" or "feature".
+            "slot" means the gating mechanism happens at the level of the whole
+            slot; 
+            "feature" means the gating mechanism happens at the level of
+            individual features.
     """
-    def __init__(self, B, K, Fmem, nheads):
+    def __init__(self, B, K, Fmem, nheads, gating="slot"):
         super().__init__()
 
         self.B = B
         self.K = K
         self.Fmem = Fmem
         self.nheads = nheads
+        self.gating = gating
 
         # maybe replace with something else
         self.self_attention = TransformerBlock(
             Fmem,
             nheads,
         )
-        self.linf = nn.Linear(2 * Fmem, Fmem)
-        self.lini = nn.Linear(2 * Fmem, Fmem)
-        self.linh = nn.Linear(2 * Fmem, Fmem)
-        self.lino = nn.Linear(2 * Fmem, Fmem)
 
-        self.proj = nn.Linear(2 * Fmem, 4 * Fmem)
+        if gating == "feature":
+            self.proj = nn.Linear(2 * Fmem, 4 * Fmem)
+        elif gating == "slot":
+            self.proj = nn.Linear(2 * Fmem, 4)
+        else:
+            raise ValueError("the 'gating' argument must be one of:\n"
+                             "\t- 'slot'\n\t- 'feature'")
 
         C, H = self._mem_init()
         self.register_buffer('C', C)
@@ -305,10 +321,12 @@ class SelfAttentionLSTM_GNN(torch.nn.Module):
 
     def forward(self, x):
 
+        # add input vectors to perform self-attention
         C_cat = torch.cat([self.C, x], 1)
         # input to the slot-LSTM
         X = self.self_attention(C_cat)[:, :self.K]
 
+        # compute forget, input and output gates
         HX = torch.cat([self.H, X], -1)
         f, i, o, Ctilde = self.proj(HX).chunk(4, -1)
 
@@ -316,6 +334,7 @@ class SelfAttentionLSTM_GNN(torch.nn.Module):
         C = self.C * torch.sigmoid(f) + Ctilde * torch.sigmoid(i)
         H = C * torch.sigmoid(o)
 
+        # register memories
         self.register_buffer('C', C)
         self.register_buffer('H', H)
 
@@ -344,8 +363,8 @@ class NegativeCosSim(torch.nn.Module):
         # z, m :: [B, N, F]
         # TODO check this
         B, N, F = z.shape
-        normz = z**2.sum(-1).unsqueeze(-1)
-        normm = m**2.sum(-1).unsqueeze(-1)
+        normz = (z**2).sum(-1).unsqueeze(-1)
+        normm = (m**2).sum(-1).unsqueeze(-1)
 
         dot = z.view([B, N, 1, F]) @ m.view([B, N, F, 1])
         return dot.squeeze(-1) / (normz * normm)
@@ -427,7 +446,7 @@ class BaseCompleteModel(torch.nn.Module):
         if not self.model_diff:
             d = self.Delta_xi(z2, m)
         else:
-            alternative: model the difference
+            # alternative: model the difference
             d = self.Delta_xi(z2, z1 + m)
 
 class CompleteModel_SlotDistance(BaseCompleteModel):
@@ -481,7 +500,7 @@ class CompleteModel_SoftMatchingDistance(BaseCompleteModel):
         super().__init__(C_phi, M_psi, Delta_xi)
 
 class CompleteModel_HardMatchingDistance(BaseCompleteModel):
-        """
+    """
     Simple CNN encoder;
     Parallel-LSTM with dot-product-attention communication between slots;
     Hard-slot-matching distance function.
@@ -505,3 +524,8 @@ class CompleteModel_HardMatchingDistance(BaseCompleteModel):
         Delta_xi = MatchDistance(Fmem, Fmem, hard=True)
 
         super().__init__(C_phi, M_psi, Delta_xi)
+
+### Tests
+
+model = SelfAttentionLSTM_GNN(7, 4, 10, 2)
+x = torch.rand(7, 4, 10)
