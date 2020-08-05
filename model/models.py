@@ -1,6 +1,7 @@
 """
 Defines the ParallelLSTM module.
 """
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -253,7 +254,7 @@ class TransformerBlock(torch.nn.Module):
 
 ### Slot-Memory architectures
 
-class SelfAttentionLSTM_GNN(torch.nn.Module):
+class SlotMem(torch.nn.Module):
     """
     A GNN where the edge model + edge aggreg is a self-attention layer.
     There are K hidden states and cells, each corresponding to a particular
@@ -270,6 +271,7 @@ class SelfAttentionLSTM_GNN(torch.nn.Module):
     Arguments:
         - B: batch size, must be specified in advance;
         - K: number of memory slots;
+        - Fin: number of features of the input;
         - Fmem: number of features of each slot;
         - nheads: number of heads in the self-attention mechanism;
         - gating: can one of "slot" or "feature".
@@ -278,7 +280,7 @@ class SelfAttentionLSTM_GNN(torch.nn.Module):
             "feature" means the gating mechanism happens at the level of
             individual features.
     """
-    def __init__(self, B, K, Fmem, nheads, gating="slot"):
+    def __init__(self, B, K, Fin, Fmem, nheads, gating="slot"):
         super().__init__()
 
         self.B = B
@@ -292,6 +294,8 @@ class SelfAttentionLSTM_GNN(torch.nn.Module):
             Fmem,
             nheads,
         )
+
+        self.input_proj = nn.Linear(Fin, Fmem)
 
         if gating == "feature":
             self.proj = nn.Linear(2 * Fmem, 4 * Fmem)
@@ -319,7 +323,10 @@ class SelfAttentionLSTM_GNN(torch.nn.Module):
         ], -1)
         return C, H
 
-    def forward(self, x):
+    def forward(self, x=None):
+        # no input
+        if x is None:
+            x = torch.empty([self.B, 1, self.Fmem])
 
         # add input vectors to perform self-attention
         C_cat = torch.cat([self.C, x], 1)
@@ -439,15 +446,67 @@ class BaseCompleteModel(torch.nn.Module):
     def next(self, x):
         return self.M_psi(self.C_phi(x))
 
-    def forward(self, x1, x2):
+    def forward(self, x1, x2, n_recurrent_passes=1):
+        """
+        Computes the energy between x1 and x2. Usually, x1 is some state and
+        x2 is some state in the future. 
+
+        n_recurrent_passes denotes the number of internal recurrent steps done
+        by the model before comparing x1 and x2. No input is given to the
+        model.
+
+        # TODO test this
+        """
         z1 = self.C_phi(x1)
         z2 = self.C_phi(x2)
-        m = self.M_psi(z1)
+
+        mlist = [self.M_psi(z1)]
+
+        for _ in range(n_recurrent_passes-1):
+            # do additional recurrent passes with no input
+            mlist.append(self.M_psi())
+        
         if not self.model_diff:
-            d = self.Delta_xi(z2, m)
+            d = self.Delta_xi(z2, mlist[-1])
         else:
             # alternative: model the difference
-            d = self.Delta_xi(z2, z1 + m)
+            d = self.Delta_xi(z2, z1 + sum(mlist))
+
+        return d
+
+    def forward_rollout(self, x, xs):
+        """
+        Computes the energy between x and a list of inputs xs.
+        The energy between x and xs[i] is computed by doing i recurrent
+        passes without input after encoding x, and comparing to the encoding
+        of x[i].
+        Returns a list of energies.
+        """
+        # TODO: modify for tensor inputs
+        if not isinstance(xs, list):
+            xs = [xs]
+
+        z = self.C_phi(x)
+        # TODO paralellize the following
+        zs = [self.C_phi(y) for y in xs]
+
+        L = len(xs)
+        mlist = [self.M_psi(z)]
+
+        for _ in range(L-1):
+            mlist.append(self.M_psi())
+
+        if not self.model_diff:
+            d = [self.Delta_xi(zz, m) for zz, m in zip(zs, mlist)]
+        else:
+            # model the difference
+            # first compute the cumulative sum of elements of mlist
+            mtensor = torch.stack(mlist, 0)
+            cumsum_mtensor = mtensor.cumsum()
+            # then model the transitions
+            d = [self.Delta_xi(zz, z + m) for zz, m in zip(zs, cumsum_mtensor)]
+
+        return d
 
 class CompleteModel_SlotDistance(BaseCompleteModel):
     """
@@ -468,7 +527,7 @@ class CompleteModel_SlotDistance(BaseCompleteModel):
                 (Fmem, Fmem),
                 (Fmem, Fmem),
             ])
-        M_psi = SelfAttentionLSTM_GNN(B, K, Fmem, nheads)
+        M_psi = SlotMem(B, K, Fmem, nheads)
         Delta_xi = L2Dist()
 
         super().__init__(C_phi, M_psi, Delta_xi)
@@ -494,7 +553,7 @@ class CompleteModel_SoftMatchingDistance(BaseCompleteModel):
                 (Fmem, Fmem),
                 (Fmem, Fmem),
             ])
-        M_psi = SelfAttentionLSTM_GNN(B, K, Fmem, nheads)
+        M_psi = SlotMem(B, K, Fmem, nheads)
         Delta_xi = MatchDistance(Fmem, Fmem, hard=False)
 
         super().__init__(C_phi, M_psi, Delta_xi)
@@ -520,12 +579,83 @@ class CompleteModel_HardMatchingDistance(BaseCompleteModel):
                 (Fmem, Fmem),
                 (Fmem, Fmem),
             ])
-        M_psi = SelfAttentionLSTM_GNN(B, K, Fmem, nheads)
+        M_psi = SlotMem(B, K, Fmem, nheads)
         Delta_xi = MatchDistance(Fmem, Fmem, hard=True)
 
         super().__init__(C_phi, M_psi, Delta_xi)
 
+### For processing sequences
+
+def recurrent_apply(recurrent_model, S):
+    # S :: [s, b] + input_dims
+    out_list = []
+
+    for i in range(len(S) - 1):
+        s1 = S[i]
+        s2 = S[i+1]
+
+        out_list += [recurrent_model(s1, s2)]
+
+    return torch.cat(out_list, 0)
+
+def recurrent_apply_contrastive(recurrent_model, S):
+    """
+    Same as recurrent_apply, applies a recurrent model on a sequence of inputs,
+    but also computes the time-contrastive term by sampling arbitrary 
+    next-states.
+
+    One-hop prediction.
+    """
+    N = len(S)
+    rand = (torch.randint(1, N-1, (N-1,)) + torch.arange(N-1)).fmod(N-1)
+
+    normal_range = list(range(N-1))
+    random_range = rand.tolist()
+
+    out_list = []
+    out_list_contrastive = []
+
+    for i, j in zip(normal_range, random_range):
+        s1 = S[i]
+        s2 = S[i+1]
+        sc = S[j+1]
+
+        out_list += [recurrent_model(s1, s2)]
+        out_list_contrastive += [recurrent_model(s1, sc)]
+
+    return torch.cat(out_list, 0), torch.cat(out_list_contrastive, 0)
+
+def recurrent_apply_contrastive_Lsteps(recurrent_model, S, L):
+    """
+    Same as before, but the predictions are rolled-out on L steps and the loss
+    is computed between all the predicted steps.
+
+    TODO: Maybe only rollout from a random subset of the start states ?
+    TODO: How to compute contrastive samples ? For now, completely random
+          sequence.
+    """
+    N = len(S)
+    assert(N > L, (f"Length of the rollout ({L}) should be strictly smaller"
+                   f" than length of the sequence ({N})"))
+    # set of random sequences
+    # check it is correct
+    rand = (torch.randint(1, N-L, (N-L, L)) + torch.arange(N-L)).fmod(N-L)
+    random_range_list = rand.tolist()
+    normal_range = range(L)
+
+    for t0, random_range in range(random_range_list):
+        # start state loop
+        t = t0
+        s = S[t]
+
+        for i, j in zip(normal_range, random_range):
+            # sequence length loop
+            strue = S[t+i]
+            scontrastive = S[t+j]
+            pred = recurrent_model(s)
+            # TODO: finish this
+
 ### Tests
 
-model = SelfAttentionLSTM_GNN(7, 4, 10, 2)
+model = SlotMem(7, 4, 10, 2)
 x = torch.rand(7, 4, 10)

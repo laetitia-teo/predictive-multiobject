@@ -20,7 +20,8 @@ COLORS = {
     'blue': (0.1, 0.1, 1.),
     'green': (0.1, 1., 0.1),
     'yellow': (1., 1., 0.1),
-    'purple': (1., 0.1, 1.)
+    'purple': (1., 0.1, 1.),
+    'black': (0., 0., 0.)
 }
 
 PI = np.pi
@@ -315,6 +316,8 @@ class TwoSphereEnv(Env):
     and blue.
 
     The spheres don't move out of the FoV. The small one may cover the big one.
+
+    TODO: fix positions of objects so they don't depend on the size
     """
     def __init__(self):
 
@@ -328,8 +331,8 @@ class TwoSphereEnv(Env):
         y_freq = np.random.random(2) * TAU
         x_phase = np.random.random(2) * TAU
         y_phase = np.random.random(2) * TAU
-        x_amp = 6.
-        y_amp = 6.
+        x_amp = 8.
+        y_amp = 8.
 
         # register params
         self.env_params['type'] = "TwoSphereEnv"
@@ -343,7 +346,7 @@ class TwoSphereEnv(Env):
         # reset objects
         self.objects = []
 
-        c1 = Circle(2, COLORS['red'], (8, 8), 0.)
+        c1 = Circle(2, COLORS['red'], (8., 8.), 0.)
         c1.x_amp = x_amp * self.gridsize
         c1.y_amp = y_amp * self.gridsize
         c1.x_freq = x_freq[0]
@@ -352,7 +355,7 @@ class TwoSphereEnv(Env):
         c1.y_phase = y_phase[0]
         self.objects.append(c1)
 
-        c2 = Circle(0.5, COLORS['blue'], (8, 8), 0.)
+        c2 = Circle(0.5, COLORS['blue'], (8., 8.), 0.)
         c2.x_amp = x_amp * self.gridsize
         c2.y_amp = y_amp * self.gridsize
         c2.x_freq = x_freq[1]
@@ -360,6 +363,26 @@ class TwoSphereEnv(Env):
         c2.x_phase = x_phase[1]
         c2.y_phase = y_phase[1]
         self.objects.append(c2)
+
+class TwoSphereScreenEnv(TwoSphereEnv):
+    """
+    An env with two moving spheres and a randomly placed black occluding
+    screen.
+    """
+    def __init__(self):
+        # check this
+        super(TwoSphereEnv, self).__init__(5, 20)
+
+        self.reset_params()
+
+    def reset_params(self):
+
+        super().reset_params()
+
+        # add black screen
+        # for now in center, motionless
+        screen = Square(8., COLORS['black'], (2., 2.), 0.)
+        self.objects.append(screen)
 
 ### Generating datasets
 
@@ -378,10 +401,18 @@ def generate(env_type, N_samples, T, dt, path):
 
 ### Testing environments
 
+envdict = {
+    "two sphere": TwoSphereEnv,
+    "two sphere screen": TwoSphereScreenEnv
+}
+
+# TESTED_ENV = envdict["two sphere"]
+TESTED_ENV = envdict["two sphere screen"]
+
 if __name__ == '__main__':
 
     # env = OneSphereEnv()
-    env = TwoSphereEnv()
+    env = TESTED_ENV()
     pygame.init()
     done = False
 

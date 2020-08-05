@@ -14,15 +14,12 @@ from torch.utils.data import Dataset, DataLoader
 
 class ImageDs(Dataset):
     """
-    Image Dataset. Not episodic (one single episode).
+    Image Dataset. Each sample is a whole sequence.
 
     We assume everything fits into memory.
     """
-    def __init__(self, path, gpu=False, dt=1):
+    def __init__(self, path, gpu=False):
         
-        self.path = path
-        self.dt = dt
-
         if gpu:
             self.device = torch.device('cuda')
         else:
@@ -67,3 +64,46 @@ class ImageDs(Dataset):
 
     def __getitem__(self, i):
         return self.data[i]
+
+class ChunkImageDS(Dataset):
+    """
+    Chunk version of ImageDs: we define an additional L param that controls the
+    length of the output sequences.
+
+    Cuts the original squences of length self.T in chunks of length L. Returns
+    each chunk only once.
+    """
+    def __init__(self, path, L, gpu=False):
+        super().__init__(path, gpu)
+
+        self.L = L
+
+    def __len__(self):
+        return self.N_samples * (self.T // self.L)
+
+    def __getitem__(self, i):
+        n_chunks = self.T // self.L
+        k, r = i // n_chunks, i % n_chunks
+        seq = self.data[k]
+        return seq[r:r+self.L]
+
+class ChunkImageDS(Dataset):
+    """
+    Chunk version of ImageDs: we define an additional L param that controls the
+    length of the output sequences.
+
+    Cuts the original squences of length self.T in chunks of length L. The 
+    chunks beginning indices span all sequence elements.
+
+    TODO: finish this
+    """
+    def __init__(self, path, L, gpu=False):
+        super().__init__(path, gpu)
+
+        self.L = L
+
+    def __len__(self):
+        raise NotImplementedError
+
+    def __getitem__(self, i):
+        raise NotImplementedError
