@@ -657,5 +657,5 @@ def recurrent_apply_contrastive_Lsteps(recurrent_model, S, L):
 
 ### Tests
 
-model = SlotMem(7, 4, 10, 2)
-x = torch.rand(7, 4, 10)
+# model = SlotMem(7, 4, 10, 2)
+# x = torch.rand(7, 4, 10)
