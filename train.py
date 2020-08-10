@@ -27,6 +27,7 @@ import matplotlib.pyplot as plt
 
 import torch
 
+from pathlib import Path
 from torch.utils.data import DataLoader
 
 # TODO use a model dict
@@ -50,7 +51,8 @@ N_HEADS = 1
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-t', '--task',
-                    dest='task')
+                    dest='task',
+                    default='two_spheres')
 parser.add_argument('--N' '--n_epochs',
                     dest=N,
                     default=N_EPOCHS)
@@ -94,11 +96,16 @@ def save_model(model, savepath):
 ### Run training
 
 if __name__ == "__main__":
+    expe_idx = 0
+
     args = parser.parse_args()
 
     datapath = op.join("data", "two_sphere")
-    savepath
-    logpath = op.join()
+    savepath = op.join('saves', args.task, str(expe_idx))
+    logpath = op.join('saves', args.task, str(expe_idx))
+
+    # create save directory if it doesn't exist
+    Path(savepath).mkdir(parents=True, exist_ok=True)
 
     today = datetime.datetime.today()
     log(f"beginning training, date:{today[2]}/{today[1]}/{today[0]}, "
@@ -109,8 +116,7 @@ if __name__ == "__main__":
     ds = ImageDs(path=datapath)
     dl = DataLoader(ds, shuffle=True, batch_size=int(args.bsize))
 
-    # Define models
-
+    # Define models and optimizer
     model = CompleteModel_SlotDistance(
         BATCH_SIZE, K, F_MEM, INPUT_DIMS, N_HEADS)
     opt = torch.optim.Adam(model.parameters(), lr=L_RATE)
@@ -118,7 +124,6 @@ if __name__ == "__main__":
     g_func = torch.nn.Identity() # TODO: change this
 
     # training metrics
-
     losses = []
 
     for epoch in range(int(args.N)):

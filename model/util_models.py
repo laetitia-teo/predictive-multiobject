@@ -149,6 +149,8 @@ class VAE(nn.Module):
     def __init__(self, zdim, inter_ch, img_size, encoder_type, decoder_type):
         super().__init__()
 
+        self.zdim = zdim
+
         self.encoder = encoder_type(3, inter_ch, zdim, img_size)
         self.decoder = decoder_type(zdim, inter_ch, 3, img_size)
 
@@ -162,21 +164,23 @@ class VAE(nn.Module):
 
         # encode to normal
         enc = self.encoder(img)
-        vec = enc.flatten(1, 3) # not necessary ?
+        # vec = enc.flatten(1, 3) # not necessary ?
         # model the log-variance instead of std
-        mus, logvar = self.lin1(vec).chunk(2, -1)
+        mus, logvar = self.lin1(enc).chunk(2, -1)
 
         # sample
         eps = torch.normal(torch.zeros(self.zdim), torch.ones(self.zdim))
         std = (0.5 * logvar).exp()
         z = mus + eps * std
+        # create spatial dims
+        z = z.expand(1, 1, B, self.zdim).permute(2, 3, 0, 1)
 
         decoded = self.decoder(z)
 
         # compute loss
         # scale for reconstruction ?
-        reconstruction_loss = torch.mse_loss(img, decoded) / self.scale
-        kl_loss = 0.5 * (logvar.exp() - 1 + mus**2 - logvar).sum(-1)
+        reconstruction_loss = F.mse_loss(img, decoded) / self.scale
+        kl_loss = 0.5 * (logvar.exp() - 1 + mus**2 - logvar).sum()
 
         loss = (reconstruction_loss + kl_loss) / B
 
@@ -201,7 +205,7 @@ class BroadcastVAE(VAE):
     """
     VAE with spatial broadcast decoder.
     """
-    def __init__(self, zdim):
+    def __init__(self, zdim, inter_ch, img_size):
         super().__init__(zdim, inter_ch, img_size,
                          MaxpoolEncoder, SpatialBroadcastDecoder)
 
@@ -209,3 +213,5 @@ class BroadcastVAE(VAE):
 
 img = torch.rand(10, 3, 50, 50)
 conv = MaxpoolEncoder(3, 32, 32, 50)
+vae1 = UpscaleVAE(32, 32, 50)
+vae2 = BroadcastVAE(32, 32, 50)
