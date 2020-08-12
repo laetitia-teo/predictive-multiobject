@@ -7,6 +7,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import models.util_models as utm
+
 ### edge index utils
 
 def get_crossgraph_ei(x, B, N1, N2):
@@ -83,54 +85,34 @@ def scatter_softmax(x, batch):
     expsum = torch.sparse.sum(st, dim=1).values()[batch]
     return exp / expsum
 
-### Helpful submodules
+### Encoders
 
-class MLP(torch.nn.Module):
-    def __init__(self, layer_sizes):
+class SimpleEncoder(torch.nn.Module):
+    """
+    Simple encoder with CNN + slots + MLP.
+    """
+    def __init__(self, in_ch, inter_ch, out_ch, in_size, K, stop=0, 
+                 num_mlp_layers=3):
         super().__init__()
 
-        layers = []
-        lin = layer_sizes.pop(0)
+        self.K = K
 
-        for i, ls in enumerate(layer_sizes):
-            layers.append(nn.Linear(lin, ls))
-            if i < len(layer_sizes) - 1:
-                layers.append(nn.ReLU())
-            ls = lin
-
-        self.net = nn.Sequential(*layers)
+        self.conv = utm.MaxpoolEncoder(
+            in_ch, inter_ch, out_ch * K, in_size, stop=stop)
+        
+        self.mlp = utm.MLP([out_ch] * num_mlp_layers)
+        # normalization layer ?
 
     def forward(self, x):
-        return self.net(x)
+        z = self.conv(x)
+        print(f"z shape {z.shape}")
+        # format by slots
+        zs = torch.stack(z.chunk(self.K, -1), 1)
+        print(f"zs shape {zs.shape}")
+        zs = self.mlp(zs)
+        return zs
 
-class ConvNet(torch.nn.Module):
-    def __init__(self, layers, mlp_layers=None, norm=False):
-        super().__init__()
-
-        layer_list = []
-
-        for Fin, Fout, kernel_size in layers:
-            layer_list.append(nn.Conv2d(Fin, Fout, kernel_size))
-            # pooling ?
-            layer_list.append(nn.MaxPool2d(2))
-            layer_list.append(nn.ReLU())
-        layer_list.pop(-1)
-
-        if mlp_layers is not None:
-            layer_list.append(nn.Flatten())
-            for Fin, Fout in mlp_layers:
-                layer_list.append(nn.Linear(Fin, Fout))
-                layer_list.append(nn.ReLU())
-            layer_list.pop(-1)
-
-        if norm:
-            # normalize (LayerNorm or BatchNorm ?)
-            ...
-
-        self.net = nn.Sequential(*layer_list)
-
-    def forward(self, x):
-        return self.conv(x)
+### Slot-Memory
 
 class SelfAttentionLayer(torch.nn.Module):
     """
@@ -240,7 +222,7 @@ class TransformerBlock(torch.nn.Module):
 
         self.mhsa = SelfAttentionLayer(d, d, d, h)
         # TODO: check papers for hparams
-        self.mlp = MLP([d, d, d])
+        self.mlp = utm.MLP([d, d, d])
 
     def forward(self, x):
 
@@ -280,7 +262,7 @@ class SlotMem(torch.nn.Module):
             "feature" means the gating mechanism happens at the level of
             individual features.
     """
-    def __init__(self, B, K, Fin, Fmem, nheads, gating="slot"):
+    def __init__(self, B, K, Fmem, nheads, gating="feature"):
         super().__init__()
 
         self.B = B
@@ -295,57 +277,50 @@ class SlotMem(torch.nn.Module):
             nheads,
         )
 
-        self.input_proj = nn.Linear(Fin, Fmem)
-
         if gating == "feature":
-            self.proj = nn.Linear(2 * Fmem, 4 * Fmem)
+            self.proj = nn.Linear(2 * Fmem, 2 * Fmem)
         elif gating == "slot":
-            self.proj = nn.Linear(2 * Fmem, 4)
+            self.proj = nn.Linear(2 * Fmem, 2)
         else:
             raise ValueError("the 'gating' argument must be one of:\n"
                              "\t- 'slot'\n\t- 'feature'")
 
-        C, H = self._mem_init()
-        self.register_buffer('C', C)
-        self.register_buffer('H', H)
+        # self.register_buffer('C', C)
+        # self.register_buffer('H', H)
 
     def _mem_init(self):
         """
         Some form of initialization where the vectors are unique.
         """
-        C = torch.cat([
+        memory0 = torch.cat([
             torch.eye(self.K).expand([self.B, self.K, self.K]),
             torch.zeros([self.B, self.K, self.Fmem - self.K])
         ], -1)
-        H = torch.cat([
-            torch.eye(self.K).expand([self.B, self.K, self.K]),
-            torch.zeros([self.B, self.K, self.Fmem - self.K])
-        ], -1)
-        return C, H
+        return memory0
 
-    def forward(self, x=None):
-        # no input
-        if x is None:
-            x = torch.empty([self.B, 1, self.Fmem])
+    def forward(self, x, memory):
+        # x can also be None when no output is provided
 
         # add input vectors to perform self-attention
-        C_cat = torch.cat([self.C, x], 1)
-        # input to the slot-LSTM
-        X = self.self_attention(C_cat)[:, :self.K]
+        if x is not None:
+            mem_cat = torch.cat([memory, x], 1)
+        else:
+            mem_cat = memory
+        # candidate input
+        mem_update = self.self_attention(mem_cat)[:, :self.K]
 
-        # compute forget, input and output gates
-        HX = torch.cat([self.H, X], -1)
-        f, i, o, Ctilde = self.proj(HX).chunk(4, -1)
+        # compute forget and input gates
+        f, i = self.proj(torch.cat([memory, mem_update], -1)).chunk(2, -1)
 
-        # note: no tanh in content update and output
-        C = self.C * torch.sigmoid(f) + Ctilde * torch.sigmoid(i)
-        H = C * torch.sigmoid(o)
+        # update memory
+        # this mechanism may be refined
+        memory = memory * torch.sigmoid(f) + mem_update * torch.sigmoid(i)
 
-        # register memories
-        self.register_buffer('C', C)
-        self.register_buffer('H', H)
+        # for now the output is the memory
+        output = memory
 
-        return H
+        return output, memory
+
 
 ### Slot-distance functions
 
@@ -357,7 +332,7 @@ class L2Dist(torch.nn.Module):
         super().__init__()
 
     def forward(self, z, m):
-        return (z - m)**2
+        return ((z - m)**2).sum(-1)**.5
 
 class NegativeCosSim(torch.nn.Module):
     """
@@ -388,6 +363,8 @@ class MatchDistance(torch.nn.Module):
     The distance computation is then made according to those created matchings.
     """
     def __init__(self, Fin, Fqk, hard=True, tau=0.5):
+        super().__init__()
+
         # note: no heads, maybe add ?
         # sparse implem for dealing with sparse edges ?
         self.Fin = Fin
@@ -398,7 +375,7 @@ class MatchDistance(torch.nn.Module):
         # temperature for the gumbel-softmax
         self.tau = tau
 
-        self.attention = AttentionLayerSparse()
+        self.attention = AttentionLayerSparse(Fin=Fin, Fqk=Fqk)
 
     def forward(self, z, m):
         B, Nz, F = z.shape
@@ -439,6 +416,8 @@ class BaseCompleteModel(torch.nn.Module):
     def __init__(self, C_phi, M_psi, Delta_xi, model_diff=False):
         super().__init__()
 
+        self.model_diff = model_diff
+
         self.C_phi = C_phi
         self.M_psi = M_psi
         self.Delta_xi = Delta_xi
@@ -446,7 +425,10 @@ class BaseCompleteModel(torch.nn.Module):
     def next(self, x):
         return self.M_psi(self.C_phi(x))
 
-    def forward(self, x1, x2, n_recurrent_passes=1):
+    def mem_init(self):
+        return self.M_psi._mem_init()
+
+    def forward(self, x1, x2, mem, n_recurrent_passes=1):
         """
         Computes the energy between x1 and x2. Usually, x1 is some state and
         x2 is some state in the future. 
@@ -460,19 +442,22 @@ class BaseCompleteModel(torch.nn.Module):
         z1 = self.C_phi(x1)
         z2 = self.C_phi(x2)
 
-        mlist = [self.M_psi(z1)]
+        # z1/z2 :: [B, K, F]
+
+        next_mem = self.M_psi(z1, mem)
 
         for _ in range(n_recurrent_passes-1):
             # do additional recurrent passes with no input
-            mlist.append(self.M_psi())
-        
+            next_mem = self.M_psi(None, next_mem)
+
+            # compute distance/energy d
         if not self.model_diff:
-            d = self.Delta_xi(z2, mlist[-1])
+            d = self.Delta_xi(z2, next_mem)
         else:
             # alternative: model the difference
-            d = self.Delta_xi(z2, z1 + sum(mlist))
+            d = self.Delta_xi(z2, z1 + next_mem)
 
-        return d
+        return d, next_mem
 
     def forward_rollout(self, x, xs):
         """
@@ -483,6 +468,9 @@ class BaseCompleteModel(torch.nn.Module):
         Returns a list of energies.
         """
         # TODO: modify for tensor inputs
+        raise NotImplementedError
+
+        # TODO: modify this to comply ith new slotmem interface
         if not isinstance(xs, list):
             xs = [xs]
 
@@ -515,18 +503,8 @@ class CompleteModel_SlotDistance(BaseCompleteModel):
     def __init__(self, B, K, Fmem, input_dims, nheads):
 
         self.H, self.W, self.C = input_dims
-        # fix this to compute size of last vector
-        C_phi = ConvNet(
-            [
-                (self.C, 32, 3),
-                (32, 32, 3),
-                (32, 32, 3),
-                (32, 32, 3),    
-            ],
-            [
-                (Fmem, Fmem),
-                (Fmem, Fmem),
-            ])
+        
+        C_phi = SimpleEncoder(3, 32, Fmem, self.H, K)
         M_psi = SlotMem(B, K, Fmem, nheads)
         Delta_xi = L2Dist()
 
@@ -541,18 +519,8 @@ class CompleteModel_SoftMatchingDistance(BaseCompleteModel):
     def __init__(self, B, K, Fmem, input_dims, nheads):
 
         self.H, self.W, self.C = input_dims
-        # fix this to compute size of last vector
-        C_phi = ConvNet(
-            [
-                (self.C, 32, 3),
-                (32, 32, 3),
-                (32, 32, 3),
-                (32, 32, 3),    
-            ],
-            [
-                (Fmem, Fmem),
-                (Fmem, Fmem),
-            ])
+
+        C_phi = SimpleEncoder(3, 32, Fmem, self.H, K)
         M_psi = SlotMem(B, K, Fmem, nheads)
         Delta_xi = MatchDistance(Fmem, Fmem, hard=False)
 
@@ -567,18 +535,8 @@ class CompleteModel_HardMatchingDistance(BaseCompleteModel):
     def __init__(self, B, K, Fmem, input_dims, nheads):
 
         self.H, self.W, self.C = input_dims
-        # fix this to compute size of last vector
-        C_phi = ConvNet(
-            [
-                (self.C, 32, 3),
-                (32, 32, 3),
-                (32, 32, 3),
-                (32, 32, 3),    
-            ],
-            [
-                (Fmem, Fmem),
-                (Fmem, Fmem),
-            ])
+
+        C_phi = SimpleEncoder(3, 32, Fmem, self.H, K)
         M_psi = SlotMem(B, K, Fmem, nheads)
         Delta_xi = MatchDistance(Fmem, Fmem, hard=True)
 
@@ -586,27 +544,34 @@ class CompleteModel_HardMatchingDistance(BaseCompleteModel):
 
 ### For processing sequences
 
-def recurrent_apply(recurrent_model, S):
+def recurrent_apply(recurrent_model, seq, mem0):
     # S :: [s, b] + input_dims
+    # mem0 is initial memory
+
     out_list = []
+    mem = mem0
 
-    for i in range(len(S) - 1):
-        s1 = S[i]
-        s2 = S[i+1]
+    for i in range(len(seq) - 1):
+        s1 = seq[i]
+        s2 = seq[i+1]
 
-        out_list += [recurrent_model(s1, s2)]
+        d, mem = recurrent_model(s1, s2, mem)
+        out_list += [d]
 
     return torch.cat(out_list, 0)
 
-def recurrent_apply_contrastive(recurrent_model, S):
+def recurrent_apply_contrastive(recurrent_model, seq, mem0):
     """
     Same as recurrent_apply, applies a recurrent model on a sequence of inputs,
     but also computes the time-contrastive term by sampling arbitrary 
     next-states.
 
     One-hop prediction.
+
+    mem0 is first memory.
     """
-    N = len(S)
+    N = len(seq)
+    # compute randomly shuffled sequence
     rand = (torch.randint(1, N-1, (N-1,)) + torch.arange(N-1)).fmod(N-1)
 
     normal_range = list(range(N-1))
@@ -615,17 +580,22 @@ def recurrent_apply_contrastive(recurrent_model, S):
     out_list = []
     out_list_contrastive = []
 
-    for i, j in zip(normal_range, random_range):
-        s1 = S[i]
-        s2 = S[i+1]
-        sc = S[j+1]
+    mem = mem0
 
-        out_list += [recurrent_model(s1, s2)]
-        out_list_contrastive += [recurrent_model(s1, sc)]
+    for i, j in zip(normal_range, random_range):
+        s1 = seq[i]
+        s2 = seq[i+1]
+        sc = seq[j+1]
+
+        d, _ = recurrent_model(s1, s2, mem)
+        d_contrastive, mem = recurrent_model(s1, sc, mem)
+
+        out_list += [d]
+        out_list_contrastive += [d_contrastive]
 
     return torch.cat(out_list, 0), torch.cat(out_list_contrastive, 0)
 
-def recurrent_apply_contrastive_Lsteps(recurrent_model, S, L):
+def recurrent_apply_contrastive_Lsteps(recurrent_model, seq, L):
     """
     Same as before, but the predictions are rolled-out on L steps and the loss
     is computed between all the predicted steps.
@@ -634,7 +604,10 @@ def recurrent_apply_contrastive_Lsteps(recurrent_model, S, L):
     TODO: How to compute contrastive samples ? For now, completely random
           sequence.
     """
-    N = len(S)
+    raise NotImplementedError
+    # TODO: adapt this to new SlotMem interface
+
+    N = len(seq)
     assert(N > L, (f"Length of the rollout ({L}) should be strictly smaller"
                    f" than length of the sequence ({N})"))
     # set of random sequences
@@ -646,12 +619,12 @@ def recurrent_apply_contrastive_Lsteps(recurrent_model, S, L):
     for t0, random_range in range(random_range_list):
         # start state loop
         t = t0
-        s = S[t]
+        s = seq[t]
 
         for i, j in zip(normal_range, random_range):
             # sequence length loop
-            strue = S[t+i]
-            scontrastive = S[t+j]
+            strue = seq[t+i]
+            scontrastive = seq[t+j]
             pred = recurrent_model(s)
             # TODO: finish this
 

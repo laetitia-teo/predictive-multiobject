@@ -9,6 +9,26 @@ import torch.nn.functional as F
 
 # from models import Conv
 
+### Misc
+
+class MLP(torch.nn.Module):
+    def __init__(self, layer_sizes):
+        super().__init__()
+
+        layers = []
+        lin = layer_sizes.pop(0)
+
+        for i, ls in enumerate(layer_sizes):
+            layers.append(nn.Linear(lin, ls))
+            if i < len(layer_sizes) - 1:
+                layers.append(nn.ReLU())
+            ls = lin
+
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.net(x)
+
 ### Encoders
 
 class MaxpoolEncoder(nn.Module):

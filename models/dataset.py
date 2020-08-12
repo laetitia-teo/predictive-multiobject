@@ -18,7 +18,7 @@ class ImageDs(Dataset):
 
     We assume everything fits into memory.
     """
-    def __init__(self, path, gpu=False):
+    def __init__(self, path, gpu=False, limit=5):
         
         if gpu:
             self.device = torch.device('cuda')
@@ -26,7 +26,7 @@ class ImageDs(Dataset):
             self.device = torch.device('cpu')
 
         # load data
-        l = os.listdir(self.path)
+        l = os.listdir(path)
         
         def indices(s):
             r = re.search(r'^sample([0-9]+)frame([0-9]+).png$', s)
@@ -38,6 +38,7 @@ class ImageDs(Dataset):
         # get nb of datapoints and sequence size
         self.N_samples = max(indices(s)[0] for s in l) + 1
         self.T = max(indices(s)[1] for s in l)
+        self.T = min(limit, self.T)
         # get image dims
         img = Image.open(op.join(path, l[0]))
         img = np.array(img).astype(np.float32)
@@ -58,6 +59,7 @@ class ImageDs(Dataset):
         print('done')
 
         self.data = t.to(self.device)
+
 
     def __len__(self):
         return self.N_samples
@@ -87,7 +89,7 @@ class ChunkImageDS(Dataset):
         seq = self.data[k]
         return seq[r:r+self.L]
 
-class ChunkImageDS(Dataset):
+class ChunkImageDS2(Dataset):
     """
     Chunk version of ImageDs: we define an additional L param that controls the
     length of the output sequences.
