@@ -41,11 +41,12 @@ from models.dataset import ImageDs
 
 N_EPOCHS = 10
 BATCH_SIZE = 64
-L_RATE = 1e-5
+L_RATE = 1e-4
 INPUT_DIMS = (100, 100, 3)
 K = 4
 F_MEM = 512
 N_HEADS = 1
+EXPE_IDX = 1
 
 ### Arguments for running training loops
 
@@ -67,7 +68,7 @@ def log(message, path, print_message=True):
         if print_message:
             print(message)
 
-def run_epoch(dl, model, opt, g_func, logpath, losses):
+def run_epoch(dl, model, opt, g_func, savepath, logpath, losses):
     """
     Train for one epoch on the dataset.
 
@@ -79,9 +80,10 @@ def run_epoch(dl, model, opt, g_func, logpath, losses):
 
         # put sequence dim as 0th dim
         seq = seq.transpose(0, 1)
+        bsize = seq.shape[1]
 
         opt.zero_grad()
-        m0 = model.mem_init()
+        mem0 = model.mem_init(bsize)
         main, contrastive = recurrent_apply_contrastive(model, seq, mem0)
         Loss = main.sum() - g_func(contrastive.sum())
         print(Loss.shape)
@@ -91,9 +93,9 @@ def run_epoch(dl, model, opt, g_func, logpath, losses):
         opt.step()
 
         losses.append(Loss.item())
-        if i % 200 == 199:
+        if i % 2 == 0:
             plt.plot(losses)
-            plt.savefig(op.join(logpath, "train_loss.png"))
+            plt.savefig(op.join(savepath, "train_loss.png"))
             plt.close()
 
         log(f"\tStep: {i}, Loss: {Loss.item()}", logpath)
@@ -104,13 +106,12 @@ def save_model(model, savepath):
 ### Run training
 
 # if __name__ == "__main__":
-expe_idx = 0
 
 args = parser.parse_args()
 
 datapath = op.join("data", "two_sphere")
-savepath = op.join("saves", args.task, str(expe_idx))
-logpath = op.join("saves", args.task, str(expe_idx), "log.txt")
+savepath = op.join("saves", args.task, str(EXPE_IDX))
+logpath = op.join("saves", args.task, str(EXPE_IDX), "log.txt")
 
 # create save directory if it doesn't exist
 Path(savepath).mkdir(parents=True, exist_ok=True)
@@ -126,11 +127,11 @@ dl = DataLoader(ds, shuffle=True, batch_size=int(args.bsize))
 
 # Define models and optimizer
 model = CompleteModel_SlotDistance(
-    BATCH_SIZE, K, F_MEM, INPUT_DIMS, N_HEADS)
+    K, F_MEM, INPUT_DIMS, N_HEADS)
 model2 = CompleteModel_SoftMatchingDistance(
-    BATCH_SIZE, K, F_MEM, INPUT_DIMS, N_HEADS)
+    K, F_MEM, INPUT_DIMS, N_HEADS)
 model3 = CompleteModel_HardMatchingDistance(
-    BATCH_SIZE, K, F_MEM, INPUT_DIMS, N_HEADS)
+    K, F_MEM, INPUT_DIMS, N_HEADS)
 opt = torch.optim.Adam(model.parameters(), lr=L_RATE)
 
 g_func = torch.nn.Identity() # TODO: change this
@@ -142,12 +143,13 @@ x2 = data[:, 1]
 # training metrics
 losses = []
 
-# for epoch in range(int(args.N)):
-#     log(f"\nbeginning epoch {epoch}\n", logpath)
+def run():
+    for epoch in range(int(args.N)):
+        log(f"\nbeginning epoch {epoch}\n", logpath)
 
-#     run_epoch(dl, model, opt, g_func, logpath, losses)
-    
-#     save_model(model, op.join(savepath, "model.pt"))
-#     log(f"model saved in directory {savepath}", logpath)
+        run_epoch(dl, model, opt, g_func, savepath, logpath, losses)
+        
+        save_model(model, op.join(savepath, "model.pt"))
+        log(f"model saved in directory {savepath}", logpath)
 
-# log("\ntraining finished sucessfully", logpath)
+    log("\ntraining finished sucessfully", logpath)

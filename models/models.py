@@ -262,10 +262,9 @@ class SlotMem(torch.nn.Module):
             "feature" means the gating mechanism happens at the level of
             individual features.
     """
-    def __init__(self, B, K, Fmem, nheads, gating="feature"):
+    def __init__(self, K, Fmem, nheads, gating="feature"):
         super().__init__()
 
-        self.B = B
         self.K = K
         self.Fmem = Fmem
         self.nheads = nheads
@@ -288,13 +287,15 @@ class SlotMem(torch.nn.Module):
         # self.register_buffer('C', C)
         # self.register_buffer('H', H)
 
-    def _mem_init(self):
+    def _mem_init(self, bsize):
         """
         Some form of initialization where the vectors are unique.
+
+        The batch size must be provided.
         """
         memory0 = torch.cat([
-            torch.eye(self.K).expand([self.B, self.K, self.K]),
-            torch.zeros([self.B, self.K, self.Fmem - self.K])
+            torch.eye(self.K).expand([bsize, self.K, self.K]),
+            torch.zeros([bsize, self.K, self.Fmem - self.K])
         ], -1)
         return memory0
 
@@ -425,8 +426,8 @@ class BaseCompleteModel(torch.nn.Module):
     def next(self, x):
         return self.M_psi(self.C_phi(x))
 
-    def mem_init(self):
-        return self.M_psi._mem_init()
+    def mem_init(self, bsize):
+        return self.M_psi._mem_init(bsize)
 
     def forward(self, x1, x2, mem, n_recurrent_passes=1):
         """
@@ -444,11 +445,11 @@ class BaseCompleteModel(torch.nn.Module):
 
         # z1/z2 :: [B, K, F]
 
-        next_mem = self.M_psi(z1, mem)
+        _, next_mem = self.M_psi(z1, mem)
 
         for _ in range(n_recurrent_passes-1):
             # do additional recurrent passes with no input
-            next_mem = self.M_psi(None, next_mem)
+            _, next_mem = self.M_psi(None, next_mem)
 
             # compute distance/energy d
         if not self.model_diff:
@@ -500,12 +501,12 @@ class CompleteModel_SlotDistance(BaseCompleteModel):
     """
     Slot-wise distance fn.
     """
-    def __init__(self, B, K, Fmem, input_dims, nheads):
+    def __init__(self, K, Fmem, input_dims, nheads):
 
         self.H, self.W, self.C = input_dims
         
         C_phi = SimpleEncoder(3, 32, Fmem, self.H, K)
-        M_psi = SlotMem(B, K, Fmem, nheads)
+        M_psi = SlotMem(K, Fmem, nheads)
         Delta_xi = L2Dist()
 
         super().__init__(C_phi, M_psi, Delta_xi)
@@ -516,12 +517,12 @@ class CompleteModel_SoftMatchingDistance(BaseCompleteModel):
     Parallel-LSTM with dot-product-attention communication between slots;
     Soft-slot-matching distance function.
     """
-    def __init__(self, B, K, Fmem, input_dims, nheads):
+    def __init__(self, K, Fmem, input_dims, nheads):
 
         self.H, self.W, self.C = input_dims
 
         C_phi = SimpleEncoder(3, 32, Fmem, self.H, K)
-        M_psi = SlotMem(B, K, Fmem, nheads)
+        M_psi = SlotMem(K, Fmem, nheads)
         Delta_xi = MatchDistance(Fmem, Fmem, hard=False)
 
         super().__init__(C_phi, M_psi, Delta_xi)
@@ -532,12 +533,12 @@ class CompleteModel_HardMatchingDistance(BaseCompleteModel):
     Parallel-LSTM with dot-product-attention communication between slots;
     Hard-slot-matching distance function.
     """
-    def __init__(self, B, K, Fmem, input_dims, nheads):
+    def __init__(self, K, Fmem, input_dims, nheads):
 
         self.H, self.W, self.C = input_dims
 
         C_phi = SimpleEncoder(3, 32, Fmem, self.H, K)
-        M_psi = SlotMem(B, K, Fmem, nheads)
+        M_psi = SlotMem(K, Fmem, nheads)
         Delta_xi = MatchDistance(Fmem, Fmem, hard=True)
 
         super().__init__(C_phi, M_psi, Delta_xi)
