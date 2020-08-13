@@ -105,10 +105,8 @@ class SimpleEncoder(torch.nn.Module):
 
     def forward(self, x):
         z = self.conv(x)
-        print(f"z shape {z.shape}")
         # format by slots
         zs = torch.stack(z.chunk(self.K, -1), 1)
-        print(f"zs shape {zs.shape}")
         zs = self.mlp(zs)
         return zs
 

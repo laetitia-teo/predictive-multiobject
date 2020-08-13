@@ -229,9 +229,38 @@ class BroadcastVAE(VAE):
         super().__init__(zdim, inter_ch, img_size,
                          MaxpoolEncoder, SpatialBroadcastDecoder)
 
+### Models for distance regression
+
+class DistanceRegressionModel(nn.Module):
+    """
+    Model used for learning to regress the distance between entities in memory.
+
+    Not clear yet what kind of model to use, let's use MLP with 2 hidden layers
+    for now.
+
+    h is size of hidden layers. Fin and Fout are in and out features 
+    respectively.
+    """
+    def __init__(self, Fin, Fout, h):
+        super().__init__()
+
+        self.net = MLP([Fin, h, h, Fout])
+
+    def forward(self, x):
+        # if x is in matrix form, flatten it
+        if len(x.shape) == 3:
+            B, S, F = x.shape
+            x = x.view(B, S * F)
+
+        return self.net(x)
+
 ### Tests
 
 img = torch.rand(10, 3, 50, 50)
 conv = MaxpoolEncoder(3, 32, 32, 50)
 vae1 = UpscaleVAE(32, 32, 50)
 vae2 = BroadcastVAE(32, 32, 50)
+
+# test distance regression on synthetic data
+
+# first test: concat the two vectors
