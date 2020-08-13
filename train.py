@@ -26,6 +26,7 @@ import argparse
 import matplotlib.pyplot as plt
 
 import torch
+import torch.nn.functional as F
 
 from pathlib import Path
 from torch.utils.data import DataLoader
@@ -47,6 +48,7 @@ K = 4
 F_MEM = 512
 N_HEADS = 1
 EXPE_IDX = 1
+BETA = 1. # multiplicative factor for g function
 
 ### Arguments for running training loops
 
@@ -60,6 +62,8 @@ parser.add_argument('--N' '--n_epochs',
 parser.add_argument('--B' '--batch_size',
                     dest='bsize',
                     default=BATCH_SIZE)
+
+### Training
 
 def log(message, path, print_message=True):
     with open(path, 'w') as f:
@@ -100,8 +104,13 @@ def run_epoch(dl, model, opt, g_func, savepath, logpath, losses):
 
         log(f"\tStep: {i}, Loss: {Loss.item()}", logpath)
 
+### Utilities
+
 def save_model(model, savepath):
     torch.save(model.state_dict(), savepath)
+
+def load_model(model, savepath):
+    model.load_state_dict(torch.load(savepath))
 
 ### Run training
 
@@ -134,7 +143,8 @@ model3 = CompleteModel_HardMatchingDistance(
     K, F_MEM, INPUT_DIMS, N_HEADS)
 opt = torch.optim.Adam(model.parameters(), lr=L_RATE)
 
-g_func = torch.nn.Identity() # TODO: change this
+# g_func = torch.nn.Identity()
+g_func = lambda x: BETA * F.softplus(1 - x)
 
 data = next(iter(dl))
 x1 = data[:, 0]
@@ -153,3 +163,12 @@ def run():
         log(f"model saved in directory {savepath}", logpath)
 
     log("\ntraining finished sucessfully", logpath)
+
+def plot_image(batch_idx, seq_idx, data=data):
+    plt.imshow(data[batch_idx, seq_idx].transpose(0, 2).numpy()/2 + 0.5)
+    plt.show()
+
+img0 = data[0, 0].unsqueeze(0)
+img4 = data[0, 4].unsqueeze(0)
+
+load_model(model, "saves/two_spheres/1/model.pt")
