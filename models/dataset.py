@@ -18,7 +18,7 @@ class ImageDs(Dataset):
 
     We assume everything fits into memory.
     """
-    def __init__(self, path, gpu=False, limit=5):
+    def __init__(self, path, gpu=False, seq_limit=None, max_samples=10):
         
         if gpu:
             self.device = torch.device('cuda')
@@ -38,7 +38,10 @@ class ImageDs(Dataset):
         # get nb of datapoints and sequence size
         self.N_samples = max(indices(s)[0] for s in l) + 1
         self.T = max(indices(s)[1] for s in l)
-        self.T = min(limit, self.T)
+        if seq_limit is not None:
+            self.T = min(seq_limit, self.T)
+        if max_samples is not None:
+            self.N_samples = min(max_samples, self.N_samples)
         # get image dims
         img = Image.open(op.join(path, l[0]))
         img = np.array(img).astype(np.float32)

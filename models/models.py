@@ -1,5 +1,5 @@
 """
-Defines the ParallelLSTM module.
+Defines the models used for the experiments.
 """
 import numpy as np
 
@@ -86,6 +86,24 @@ def scatter_softmax(x, batch):
     return exp / expsum
 
 ### Encoders
+
+class PureCNNEncoder(torch.nn.Module):
+    """
+    Simplest encoder with CNN + chunking on the feature dim.
+    """
+    def __init__(self, in_ch, inter_ch, out_ch, in_size, K, stop=0):
+        super().__init__()
+
+        self.K = K
+
+        self.conv = utm.MaxpoolEncoder(
+            in_ch, inter_ch, out_ch * K, in_size, stop=stop)
+    
+    def forward(self, x):
+        z = self.conv(x)
+        # format by slots
+        zs = torch.stack(z.chunk(self.K, -1), 1)
+        return zs
 
 class SimpleEncoder(torch.nn.Module):
     """
@@ -499,15 +517,15 @@ class CompleteModel_SlotDistance(BaseCompleteModel):
     """
     Slot-wise distance fn.
     """
-    def __init__(self, K, Fmem, input_dims, nheads):
+    def __init__(self, K, Fmem, input_dims, nheads, model_diff=False):
 
         self.H, self.W, self.C = input_dims
         
-        C_phi = SimpleEncoder(3, 32, Fmem, self.H, K)
+        C_phi = PureCNNEncoder(3, 32, Fmem, self.H, K)
         M_psi = SlotMem(K, Fmem, nheads)
         Delta_xi = L2Dist()
 
-        super().__init__(C_phi, M_psi, Delta_xi)
+        super().__init__(C_phi, M_psi, Delta_xi, model_diff=model_diff)
 
 class CompleteModel_SoftMatchingDistance(BaseCompleteModel):
     """
@@ -592,7 +610,7 @@ def recurrent_apply_contrastive(recurrent_model, seq, mem0):
         out_list += [d]
         out_list_contrastive += [d_contrastive]
 
-    return torch.cat(out_list, 0), torch.cat(out_list_contrastive, 0)
+    return torch.stack(out_list, 0), torch.stack(out_list_contrastive, 0)
 
 def recurrent_apply_contrastive_Lsteps(recurrent_model, seq, L):
     """
