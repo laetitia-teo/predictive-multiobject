@@ -107,7 +107,7 @@ class PureCNNEncoder(torch.nn.Module):
 
 class SimpleEncoder(torch.nn.Module):
     """
-    Simple encoder with CNN + slots + MLP.
+    Simple encoder. Adds an mlp to the output of the PureCNNEncoder.
     """
     def __init__(self, in_ch, inter_ch, out_ch, in_size, K, stop=0, 
                  num_mlp_layers=3):
@@ -218,31 +218,41 @@ class AttentionLayerSparse(torch.nn.Module):
 
         return out
 
-class TransformerBlock(torch.nn.Module):
+class TransformerBlock(nn.Module):
     """
     Implements a full Transformer block, with skip connexions, layernorm
     and an mlp.
 
     Arguments:
         - d: dimension of a head
+        - projdim: dimension for projection inside mhsa
         - h: number of heads
     """
-    def __init__(self, d, h):
+    def __init__(self, d, projdim, h):
         super().__init__()
 
         self.d = d
         self.h = h
+        self.projdim = projdim
 
-        self.norm1 = torch.nn.LayerNorm([d])
-        self.norm2 = torch.nn.LayerNorm([d])
+        if self.projdim != self.d:
+            # need an additional linear layer for the skip-connexion
+            # to ajust the dimensionality of outputs
+            self.proj = nn.Linear(projdim, d)
 
-        self.mhsa = SelfAttentionLayer(d, d, d, h)
+        self.norm1 = nn.LayerNorm([d])
+        self.norm2 = nn.LayerNorm([d])
+
+        self.mhsa = SelfAttentionLayer(d, projdim, projdim, h)
         # TODO: check papers for hparams
-        self.mlp = utm.MLP([d, d, d])
+        self.mlp = utm.MLP([d, projdim, d])
 
     def forward(self, x):
 
         y = self.mhsa(x)
+        if self.projdim != self.d:
+            # ajust dimension of output
+            y = self.proj(y)
         y = self.norm1(x + y)
 
         z = self.mlp(y)
@@ -270,7 +280,8 @@ class SlotMem(torch.nn.Module):
         - B: batch size, must be specified in advance;
         - K: number of memory slots;
         - Fin: number of features of the input;
-        - Fmem: number of features of each slot;
+        - Fmem: number of features of each memory slot;
+        - H: number of dims of the projections in Transformer;
         - nheads: number of heads in the self-attention mechanism;
         - gating: can one of "slot" or "feature".
             "slot" means the gating mechanism happens at the level of the whole
@@ -278,20 +289,23 @@ class SlotMem(torch.nn.Module):
             "feature" means the gating mechanism happens at the level of
             individual features.
     """
-    def __init__(self, K, Fmem, nheads, gating="feature"):
+    def __init__(self, K, Fmem, H, nheads, gating="feature"):
         super().__init__()
 
         self.K = K
         self.Fmem = Fmem
+        self.H = H
         self.nheads = nheads
         self.gating = gating
 
         # maybe replace with something else
         self.self_attention = TransformerBlock(
             Fmem,
+            H,
             nheads,
         )
 
+        # define the gating net
         if gating == "feature":
             self.proj = nn.Linear(2 * Fmem, 2 * Fmem)
         elif gating == "slot":
@@ -299,9 +313,6 @@ class SlotMem(torch.nn.Module):
         else:
             raise ValueError("the 'gating' argument must be one of:\n"
                              "\t- 'slot'\n\t- 'feature'")
-
-        # self.register_buffer('C', C)
-        # self.register_buffer('H', H)
 
     def _mem_init(self, bsize):
         """
@@ -517,12 +528,13 @@ class CompleteModel_SlotDistance(BaseCompleteModel):
     """
     Slot-wise distance fn.
     """
-    def __init__(self, K, Fmem, input_dims, nheads, model_diff=False):
+    def __init__(self, K, Fmem, hidden_dim, input_dims, nheads, 
+                 model_diff=False):
 
         self.H, self.W, self.C = input_dims
         
         C_phi = PureCNNEncoder(3, 32, Fmem, self.H, K)
-        M_psi = SlotMem(K, Fmem, nheads)
+        M_psi = SlotMem(K, Fmem, hidden_dim, nheads)
         Delta_xi = L2Dist()
 
         super().__init__(C_phi, M_psi, Delta_xi, model_diff=model_diff)
@@ -533,12 +545,12 @@ class CompleteModel_SoftMatchingDistance(BaseCompleteModel):
     Parallel-LSTM with dot-product-attention communication between slots;
     Soft-slot-matching distance function.
     """
-    def __init__(self, K, Fmem, input_dims, nheads):
+    def __init__(self, K, Fmem, hidden_dim, input_dims, nheads):
 
         self.H, self.W, self.C = input_dims
 
         C_phi = SimpleEncoder(3, 32, Fmem, self.H, K)
-        M_psi = SlotMem(K, Fmem, nheads)
+        M_psi = SlotMem(K, Fmem, hidden_dim, nheads)
         Delta_xi = MatchDistance(Fmem, Fmem, hard=False)
 
         super().__init__(C_phi, M_psi, Delta_xi)
@@ -549,12 +561,12 @@ class CompleteModel_HardMatchingDistance(BaseCompleteModel):
     Parallel-LSTM with dot-product-attention communication between slots;
     Hard-slot-matching distance function.
     """
-    def __init__(self, K, Fmem, input_dims, nheads):
+    def __init__(self, K, Fmem, hidden_dim, input_dims, nheads):
 
         self.H, self.W, self.C = input_dims
 
         C_phi = SimpleEncoder(3, 32, Fmem, self.H, K)
-        M_psi = SlotMem(K, Fmem, nheads)
+        M_psi = SlotMem(K, Fmem, hidden_dim, nheads)
         Delta_xi = MatchDistance(Fmem, Fmem, hard=True)
 
         super().__init__(C_phi, M_psi, Delta_xi)

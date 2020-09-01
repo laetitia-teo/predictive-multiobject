@@ -22,7 +22,7 @@ class MLP(torch.nn.Module):
             layers.append(nn.Linear(lin, ls))
             if i < len(layer_sizes) - 1:
                 layers.append(nn.ReLU())
-            ls = lin
+            lin = ls
 
         self.net = nn.Sequential(*layers)
 
@@ -72,6 +72,43 @@ class MaxpoolEncoder(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
+class CNN_nopool(nn.Module):
+    """
+    A CNN encoder, with no pooling. This ensures (?) that spatial information
+    is kept intact until the last layer, which allows subsequent nets to acess
+    it better.
+
+    The number of output channels is also the number of output slots.
+
+    Maybe pool only one or twice, depending on the input size, to save RAM.
+    """
+    def __init__(self, in_ch, inter_ch, out_ch, n_layers):
+        super().__init__()
+
+        f_in = in_ch
+        f_out = inter_ch
+
+        layers = []
+        for i in range(n_layers):
+            layers.append(
+                nn.Conv2d(f_in, f_out, 3, padding=1, padding_mode='reflect'))
+            layers.append(nn.ReLU())
+
+            f_in = inter_ch
+            if i == n_layers - 2:
+                f_out = out_ch
+
+        layers.pop(-1)
+        # layers.append(nn.Flatten(1, 3))
+
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = self.net(x)
+        _, C, W, H = out.shape
+        out = out.reshape((-1, C, W*H))
+        return out
 
 ### Decoders
 
