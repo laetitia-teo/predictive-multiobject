@@ -93,14 +93,16 @@ class CNN_nopool(nn.Module):
         for i in range(n_layers):
             layers.append(
                 nn.Conv2d(f_in, f_out, 3, padding=1, padding_mode='reflect'))
+            if i == n_layers - 1:
+                # add one pooling layer for fitting model into memory
+                layers.append(nn.MaxPool2d(2))
             layers.append(nn.ReLU())
 
             f_in = inter_ch
             if i == n_layers - 2:
                 f_out = out_ch
 
-        layers.pop(-1)
-        # layers.append(nn.Flatten(1, 3))
+        layers.pop(-1) # pop las relu
 
         self.net = nn.Sequential(*layers)
 

@@ -219,13 +219,17 @@ class Env():
 
             # base x and y pos
             ox, oy = ((self.gridsize * obj.pos)).astype(int)
+
             # compute x and y deviation due to movement
-            xm = obj.x_amp * np.sin(obj.x_freq * self.time + obj.x_phase)
-            ym = obj.y_amp * np.sin(obj.y_freq * self.time + obj.y_phase)
+            xm = obj.x_amp * \
+                (np.sin(obj.x_freq * self.time + obj.x_phase) + 1) / 2
+            ym = obj.y_amp * \
+                (np.sin(obj.y_freq * self.time + obj.y_phase) + 1) / 2
 
-            ox += xm
-            oy += ym
+            ox += xm * self.gridsize
+            oy += ym * self.gridsize
 
+            # apply alpha channel
             obj_mat = obj_mat[..., :] * np.expand_dims(obj_mat[..., 3], -1)
             
             # indices
@@ -319,9 +323,9 @@ class TwoSphereEnv(Env):
 
     TODO: fix positions of objects so they don't depend on the size
     """
-    def __init__(self):
+    def __init__(self, gridsize=3, envsize=10):
 
-        super().__init__(5, 20)
+        super().__init__(gridsize, envsize)
 
         self.reset_params()
 
@@ -331,8 +335,6 @@ class TwoSphereEnv(Env):
         y_freq = np.random.random(2) * TAU
         x_phase = np.random.random(2) * TAU
         y_phase = np.random.random(2) * TAU
-        x_amp = 8.
-        y_amp = 8.
 
         # register params
         self.env_params['type'] = "TwoSphereEnv"
@@ -340,24 +342,24 @@ class TwoSphereEnv(Env):
         self.env_params['y_freq'] = list(y_freq)
         self.env_params['x_phase'] = list(x_phase)
         self.env_params['y_phase'] = list(y_phase)
-        self.env_params['x_amp'] = x_amp
-        self.env_params['y_amp'] = y_amp
+        # self.env_params['x_amp'] = x_amp
+        # self.env_params['y_amp'] = y_amp
 
         # reset objects
         self.objects = []
 
-        c1 = Circle(2, COLORS['red'], (8., 8.), 0.)
-        c1.x_amp = x_amp * self.gridsize
-        c1.y_amp = y_amp * self.gridsize
+        c1 = Circle(2., COLORS['red'], (0., 0.), 0.)
+        c1.x_amp = self.envsize - 2 * c1.size
+        c1.y_amp = self.envsize - 2 * c1.size
         c1.x_freq = x_freq[0]
         c1.y_freq = y_freq[0]
         c1.x_phase = x_phase[0]
         c1.y_phase = y_phase[0]
         self.objects.append(c1)
 
-        c2 = Circle(0.5, COLORS['blue'], (8., 8.), 0.)
-        c2.x_amp = x_amp * self.gridsize
-        c2.y_amp = y_amp * self.gridsize
+        c2 = Circle(1., COLORS['blue'], (0., 0.), 0.)
+        c2.x_amp = self.envsize - 2 * c2.size
+        c2.y_amp = self.envsize - 2 * c2.size
         c2.x_freq = x_freq[1]
         c2.y_freq = y_freq[1]
         c2.x_phase = x_phase[1]
@@ -371,7 +373,7 @@ class TwoSphereScreenEnv(TwoSphereEnv):
     """
     def __init__(self):
         # check this
-        super(TwoSphereEnv, self).__init__(5, 20)
+        super(TwoSphereEnv, self).__init__(3, 10)
 
         self.reset_params()
 
@@ -407,7 +409,7 @@ envdict = {
 }
 
 # TESTED_ENV = envdict["two sphere"]
-TESTED_ENV = envdict["two sphere screen"]
+TESTED_ENV = envdict["two sphere"]
 
 if __name__ == '__main__':
 

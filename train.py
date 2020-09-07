@@ -34,16 +34,18 @@ import torch.nn.functional as F
 from pathlib import Path
 from torch.utils.data import DataLoader
 
-# TODO use a model dict
-from models.models import (CompleteModel_SlotDistance,
-                           CompleteModel_SoftMatchingDistance,
-                           CompleteModel_HardMatchingDistance,
-                           recurrent_apply_contrastive)
+import models.models as mod
+
+# # TODO use a model dict
+# from models.models import (CompleteModel_SlotDistance,
+#                            CompleteModel_SoftMatchingDistance,
+#                            CompleteModel_HardMatchingDistance,
+#                            recurrent_apply_contrastive)
 from models.dataset import ImageDs
 
 ### Constants
 
-N_EPOCHS = 200
+N_EPOCHS = 50
 BATCH_SIZE = 8
 L_RATE = 1e-3
 INPUT_DIMS = (100, 100, 3)
@@ -100,7 +102,7 @@ def one_step(seq, model, opt, g_func, savepath, logpath, info,
     bsize = seq.shape[1]
 
     mem0 = model.mem_init(bsize)
-    main, contrastive = recurrent_apply_contrastive(model, seq, mem0)
+    main, contrastive = mod.recurrent_apply_contrastive(model, seq, mem0)
     Loss_main = main.sum() / bsize
     Loss_contrastive = - g_func(contrastive).sum() / bsize
     Loss = Loss_main + Loss_contrastive
@@ -180,7 +182,7 @@ def cos_sim(v1, v2):
 EXPE_IDX = get_expe_idx()
 if DEBUG:
     EXPE_IDX = "DEBUG"
-if REDO_EXPE:
+elif REDO_EXPE:
     EXPE_IDX -= 1
 
 datapath = op.join("data", "two_spheres")
@@ -194,11 +196,12 @@ ds = ImageDs(path=datapath, seq_limit=100)
 dl = DataLoader(ds, shuffle=True, batch_size=int(args.bsize))
 
 # Define models and optimizer
-model = CompleteModel_SlotDistance(
-    K, F_MEM, HIDDEN_DIM, INPUT_DIMS, N_HEADS,  model_diff=True)
-model2 = CompleteModel_SoftMatchingDistance(
+model = mod.CompleteModel_Debug
+model1 = mod.CompleteModel_SlotDistance(
     K, F_MEM, HIDDEN_DIM, INPUT_DIMS, N_HEADS)
-model3 = CompleteModel_HardMatchingDistance(
+model2 = mod.CompleteModel_SoftMatchingDistance(
+    K, F_MEM, HIDDEN_DIM, INPUT_DIMS, N_HEADS)
+model3 = mod.CompleteModel_HardMatchingDistance(
     K, F_MEM, HIDDEN_DIM, INPUT_DIMS, N_HEADS)
 opt = torch.optim.Adam(model.parameters(), lr=L_RATE)
 

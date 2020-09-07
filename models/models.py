@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import models.util_models as utm
+import util_models as utm
 
 ### edge index utils
 
@@ -87,7 +87,7 @@ def scatter_softmax(x, batch):
 
 ### Encoders
 
-class PureCNNEncoder(torch.nn.Module):
+class PureCNNEncoder(nn.Module):
     """
     Simplest encoder with CNN + chunking on the feature dim.
     """
@@ -105,7 +105,22 @@ class PureCNNEncoder(torch.nn.Module):
         zs = torch.stack(z.chunk(self.K, -1), 1)
         return zs
 
-class SimpleEncoder(torch.nn.Module):
+class PureCNNEncoder_nopool(nn.Module):
+    """
+    Simplest encoder with CNN + chunking on the feature dim.
+    """
+    def __init__(self, in_ch, inter_ch, out_ch, in_size, K, n_layers=5):
+        super().__init__()
+
+        self.K = K
+        self.conv = utm.CNN_nopool(in_ch, inter_ch, K, n_layers)
+        self.phi = nn.Linear((in_size//2)**2, out_ch)
+    
+    def forward(self, x):
+        out = self.conv(x)
+        return self.phi(out)
+
+class SimpleEncoder(nn.Module):
     """
     Simple encoder. Adds an mlp to the output of the PureCNNEncoder.
     """
@@ -130,7 +145,7 @@ class SimpleEncoder(torch.nn.Module):
 
 ### Slot-Memory
 
-class SelfAttentionLayer(torch.nn.Module):
+class SelfAttentionLayer(nn.Module):
     """
     Multi-head Self-Attention layer.
 
@@ -178,7 +193,7 @@ class SelfAttentionLayer(torch.nn.Module):
 
         return out
 
-class AttentionLayerSparse(torch.nn.Module):
+class AttentionLayerSparse(nn.Module):
     """
     Sparse version of the above, for accepting batches with different
     numbers of objects.
@@ -262,7 +277,7 @@ class TransformerBlock(nn.Module):
 
 ### Slot-Memory architectures
 
-class SlotMem(torch.nn.Module):
+class SlotMem(nn.Module):
     """
     A GNN where the edge model + edge aggreg is a self-attention layer.
     There are K hidden states and cells, each corresponding to a particular
@@ -349,10 +364,54 @@ class SlotMem(torch.nn.Module):
 
         return output, memory
 
+class SlotMemIndependent(nn.Module):
+    """
+    Slot-memory, LSTM structure, no interaction between slots.
+
+    The dimensions of input and outputs can differ from the dimension
+    of memory.
+    """
+    def __init__(self, K, Fmem, Fin, Fout):
+        super().__init__()
+
+        self.K = K
+        self.Fmem = Fmem
+        self.Fin = Fin
+
+        self.proj = nn.Linear(Fin + Fmem, 4 * Fmem)
+        self.out_proj = nn.Linear(Fmem, Fout)
+
+    def mem_init(self, bsize):
+        """
+        Initializes hidden state and cell.
+        """
+        h0 = torch.cat([
+            torch.eye(self.K).expand([bsize, self.K, self.K]),
+            torch.zeros([bsize, self.K, self.Fmem - self.K])
+        ], -1)
+        c0 = torch.cat([
+            torch.eye(self.K).expand([bsize, self.K, self.K]),
+            torch.zeros([bsize, self.K, self.Fmem - self.K])
+        ], -1)
+        
+        return torch.cat([h0, c0], -1)
+
+    def forward(self, x, mem):
+        h, c = mem.chunk(2, -1)
+        
+        f, i, c_tilde, o = self.proj(torch.cat([x, h], -1)).chunk(4, -1)
+        c_tilde = torch.tanh(c_tilde)
+        c = torch.sigmoid(f) * c + torch.sigmoid(i) * c_tilde
+        h = torch.sigmoid(o) * c
+        
+        out = self.out_proj(h)
+        mem = torch.cat([h, c], -1)
+        
+        return out, mem
 
 ### Slot-distance functions
 
-class L2Dist(torch.nn.Module):
+class L2Dist(nn.Module):
     """
     Simple slot-wise L2 distance.
     """
@@ -362,7 +421,7 @@ class L2Dist(torch.nn.Module):
     def forward(self, z, m):
         return ((z - m)**2).sum(-1)**.5
 
-class NegativeCosSim(torch.nn.Module):
+class NegativeCosSim(nn.Module):
     """
     Slot-wise negative cosine similarity.
     """
@@ -379,7 +438,7 @@ class NegativeCosSim(torch.nn.Module):
         dot = z.view([B, N, 1, F]) @ m.view([B, N, F, 1])
         return dot.squeeze(-1) / (normz * normm)
 
-class MatchDistance(torch.nn.Module):
+class MatchDistance(nn.Module):
     """
     This module defines a matching procedure between the two given slot-based
     elements: First a compatibility score is computed between all vectors and
@@ -435,7 +494,7 @@ class MatchDistance(torch.nn.Module):
 
 ### Complete models
 
-class BaseCompleteModel(torch.nn.Module):
+class BaseCompleteModel(nn.Module):
     """
     Base class for a complete model, with an encoder, a slot-memory mechanism
     and a distance mechanism. Subclasses of this may define the models in the
@@ -524,6 +583,20 @@ class BaseCompleteModel(torch.nn.Module):
 
         return d
 
+class CompleteModel_Debug(BaseCompleteModel):
+    """
+    Simpler, debugging version.
+    """
+    def __init__(self, K, Fmem, hidden_dim, input_dims, nheads,
+                 model_diff=True):
+        self.H, self.W, self.C = input_dims
+        
+        C_phi = PureCNNEncoder_nopool(3, 32, Fmem, self.H, K)
+        M_psi = SlotMemIndependent(K, hidden_dim, Fmem, Fmem)
+        Delta_xi = L2Dist()
+
+        super().__init__(C_phi, M_psi, Delta_xi, model_diff=model_diff)
+
 class CompleteModel_SlotDistance(BaseCompleteModel):
     """
     Slot-wise distance fn.
@@ -533,7 +606,7 @@ class CompleteModel_SlotDistance(BaseCompleteModel):
 
         self.H, self.W, self.C = input_dims
         
-        C_phi = PureCNNEncoder(3, 32, Fmem, self.H, K)
+        C_phi = PureCNNEncoder_nopool(3, 32, Fmem, self.H, K)
         M_psi = SlotMem(K, Fmem, hidden_dim, nheads)
         Delta_xi = L2Dist()
 
