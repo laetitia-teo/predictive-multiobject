@@ -632,6 +632,7 @@ class CompleteModel_Debug(BaseCompleteModel):
     def __init__(self, K, Fmem, hidden_dim, input_dims, nheads,
                  model_diff=True):
         self.H, self.W, self.C = input_dims
+        self.K = K
         
         C_phi = PureCNNEncoder_nopool(3, 32, Fmem, self.H, K)
         M_psi = SlotMemIndependent(K, hidden_dim, Fmem, Fmem)
@@ -647,6 +648,7 @@ class CompleteModel_SlotDistance(BaseCompleteModel):
                  model_diff=False):
 
         self.H, self.W, self.C = input_dims
+        self.K = K
         
         C_phi = PureCNNEncoder_nopool(3, 32, Fmem, self.H, K)
         M_psi = SlotMem(K, Fmem, hidden_dim, nheads)
@@ -663,6 +665,7 @@ class CompleteModel_SoftMatchingDistance(BaseCompleteModel):
     def __init__(self, K, Fmem, hidden_dim, input_dims, nheads):
 
         self.H, self.W, self.C = input_dims
+        self.K = K
 
         C_phi = SimpleEncoder(3, 32, Fmem, self.H, K)
         M_psi = SlotMem(K, Fmem, hidden_dim, nheads)
@@ -679,6 +682,7 @@ class CompleteModel_HardMatchingDistance(BaseCompleteModel):
     def __init__(self, K, Fmem, hidden_dim, input_dims, nheads):
 
         self.H, self.W, self.C = input_dims
+        self.K = K
 
         C_phi = SimpleEncoder(3, 32, Fmem, self.H, K)
         M_psi = SlotMem(K, Fmem, hidden_dim, nheads)

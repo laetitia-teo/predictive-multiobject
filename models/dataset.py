@@ -18,7 +18,7 @@ class ImageDs(Dataset):
 
     We assume everything fits into memory.
     """
-    def __init__(self, path, gpu=False, seq_limit=None, max_samples=20):
+    def __init__(self, path, gpu=False, seq_limit=None, max_samples=8):
         
         if gpu:
             self.device = torch.device('cuda')

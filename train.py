@@ -48,7 +48,7 @@ from models.dataset import ImageDs
 
 ### Constants
 
-N_EPOCHS = 50
+N_EPOCHS = 100
 BATCH_SIZE = 8
 L_RATE = 1e-3
 INPUT_DIMS = (100, 100, 3)
@@ -59,6 +59,8 @@ N_HEADS = 1
 # EXPE_IDX = 5
 BETA = 1. # multiplicative factor for g function
 CLIP_GRAD = 1e-3 # ?
+
+MAX_SAMPLES = 1 # to control the overfitting regime
 
 DEBUG = True # results go in DEBUG folder
 REDO_EXPE = False # wether to redo previous experiment
@@ -121,9 +123,7 @@ def one_step(seq, model, opt, g_func, savepath, logpath, info,
         nn.utils.clip_grad_norm_(model.parameters(), CLIP_GRAD)
 
     # record gradients
-    info['grads'].append(torch.cat(
-        [p.grad.flatten() for p in model.parameters()]
-    ))
+    info['grads'].append(get_grad(model))
     
     opt.step()
     opt.zero_grad()
@@ -174,7 +174,7 @@ def load_model(model, savepath):
 
 def dump_info_json(info, savepath):
     s = json.dumps(info)
-    with open("info.json", 'a') as jsonfile:
+    with open("info.json", 'w') as jsonfile:
         jsonfile.write(s)
 
 def dump_info_csv(info, savepath):
@@ -192,6 +192,13 @@ def dump_info_csv(info, savepath):
 
 def nparams(model):
     return sum(p.numel() for p in model.parameters())
+
+def get_grad(model):
+    # gets accumulated gradients in model parameters as a single vector
+    pl = []
+    for p in model.parameters():
+        l.append(p.grad.reshape(-1))
+    return torch.cat(l, 0)
 
 def norm2(v):
     return ((v**2).sum())**.5
@@ -218,7 +225,7 @@ logpath = op.join("saves", args.task, str(EXPE_IDX), "log.txt")
 # create save directory if it doesn't exist
 Path(savepath).mkdir(parents=True, exist_ok=True)
 
-ds = ImageDs(path=datapath, seq_limit=100)
+ds = ImageDs(path=datapath, seq_limit=100, max_samples=MAX_SAMPLES)
 dl = DataLoader(ds, shuffle=True, batch_size=int(args.bsize))
 
 # Define models and optimizer
@@ -334,6 +341,23 @@ def slot_sequence(model, data, t=20, model_diff=False):
 
     plt.show()
 
+def plot_fmaps(model, data):
+    # data [S, B, C, W, H]
+    K = model.K
+    W = model.W
+
+    img = data[0, 0]
+    img = img.permute(1, 2, 0)/2 + 0.5
+    with torch.no_grad():
+        fmap = model.C_phi.conv(data[0])[0].reshape(K, W//2, W//2)
+
+    fig, axs = plt.subplots(1, K+1)
+    axs[0].imshow(img)
+    for i in range(K):
+        axs[i+1].matshow(fmap[i])
+
+    plt.show()
+
 def plot_image_sequence_and_hidden_representations(model, data):
     """
     Given a complete model, a sequence of batched images, the function plots
@@ -404,17 +428,29 @@ def plot_image_sequence_and_hidden_representations(model, data):
     colors1 = cm1(np.arange(81))
     xs1 = [z[0, 0, 0] for z in z_list]
     ys1 = [z[0, 0, 1] for z in z_list]
-    print(xs1[0])
-    print(ys1[0])
 
     axs[1].scatter(xs1, ys1, c=colors1)
     
-    cm2 = plt.get_cmap("Blues")
+    cm2 = plt.get_cmap("Reds")
     colors2 = cm2(np.arange(81))
-    xs2 = [z[0, 1, 0] for z in z_hat_list]
-    ys2 = [z[0, 1, 1] for z in z_hat_list]
+    xs2 = [z[0, 1, 0] for z in z_list]
+    ys2 = [z[0, 1, 1] for z in z_list]
 
     axs[1].scatter(xs2, ys2, c=colors2)
+
+    cm3 = plt.get_cmap("Blues")
+    colors3 = cm3(np.arange(81))
+    xs3 = [z[0, 0, 0] for z in z_hat_list]
+    ys3 = [z[0, 0, 1] for z in z_hat_list]
+
+    axs[1].scatter(xs3, ys3, c=colors3)
+
+    cm4 = plt.get_cmap("Greens")
+    colors4 = cm4(np.arange(81))
+    xs4 = [z[0, 1, 0] for z in z_hat_list]
+    ys4 = [z[0, 1, 1] for z in z_hat_list]
+
+    axs[1].scatter(xs4, ys4, c=colors4)
 
     plt.show()
 
