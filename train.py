@@ -20,11 +20,14 @@ Hyperparamer of the experiments:
 # unfolds with subprocess and pygame ?
 
 import os
-import re
-import datetime
 import os.path as op
+import re
+import csv
+import json
+import datetime
 import argparse
 
+import numpy as np
 import matplotlib.pyplot as plt
 
 import torch
@@ -57,8 +60,8 @@ N_HEADS = 1
 BETA = 1. # multiplicative factor for g function
 CLIP_GRAD = 1e-3 # ?
 
-DEBUG = False # results go in DEBUG folder
-REDO_EXPE = True # wether to redo previous experiment
+DEBUG = True # results go in DEBUG folder
+REDO_EXPE = False # wether to redo previous experiment
 
 ### Arguments for running training loops
 
@@ -82,6 +85,11 @@ def get_expe_idx():
     dirs = os.listdir(op.join("saves", args.task))
     max_idx = max([-1] + [int(d) for d in dirs if re.match(r'^[0-9]+$', d)])
     return max_idx + 1
+
+def get_description():
+    s = (f"\nF_MEM={F_MEM}\nHIDDEN_DIM={HIDDEN_DIM}\nL_RATE={L_RATE}\nN_EPOCH"
+        f"S={N_EPOCHS}\nBATCH_SIZE={BATCH_SIZE}\n\n")
+    return s
 
 def log(message, path, print_message=True):
     with open(path, 'a') as f:
@@ -164,6 +172,24 @@ def save_model(model, savepath):
 def load_model(model, savepath):
     model.load_state_dict(torch.load(savepath))
 
+def dump_info_json(info, savepath):
+    s = json.dumps(info)
+    with open("info.json", 'a') as jsonfile:
+        jsonfile.write(s)
+
+def dump_info_csv(info, savepath):
+    # TODO: do in csv
+    with open("info.csv", 'a') as csvfile:
+        fieldnames = info.keys()
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+
+        # assumes all dict vales have the same length
+        for i in range(len(info["losses"])):
+            # wrier.writerow()
+            pass 
+            # TODO finish
+
 def nparams(model):
     return sum(p.numel() for p in model.parameters())
 
@@ -196,7 +222,7 @@ ds = ImageDs(path=datapath, seq_limit=100)
 dl = DataLoader(ds, shuffle=True, batch_size=int(args.bsize))
 
 # Define models and optimizer
-model = mod.CompleteModel_Debug
+model = mod.CompleteModel_Debug(K, F_MEM, HIDDEN_DIM, (30, 30, 3), N_HEADS)
 model1 = mod.CompleteModel_SlotDistance(
     K, F_MEM, HIDDEN_DIM, INPUT_DIMS, N_HEADS)
 model2 = mod.CompleteModel_SoftMatchingDistance(
@@ -224,6 +250,7 @@ info = {
 def run():
     s = input(f"Please enter a short description for this run ({EXPE_IDX})")
     log(f"Experiment {EXPE_IDX}.", logpath)
+    log(get_description(), logpath)
     log(s, logpath)
     log("", logpath)
 
@@ -306,6 +333,91 @@ def slot_sequence(model, data, t=20, model_diff=False):
                 axs[1, i].matshow(model.C_phi(one_batch_seq[i]) + mem[0])
 
     plt.show()
+
+def plot_image_sequence_and_hidden_representations(model, data):
+    """
+    Given a complete model, a sequence of batched images, the function plots
+    the sequence at batch index 0 and the scatterplot of representations.
+    If the representations are not 2-dimensional, we do PCA/T-SNE/UMAP (TODO).
+    The color of the points in the scatterplot give us the position in time
+    of the representation. (The bluer they are, the more recent).
+
+    The sequence is of length 81 (27*3), and is expected in [seq_len, batch,
+    channel, width, height] format.
+    """
+    
+    # compute image
+    im_size = 30
+    vert_sep = np.ones((im_size, im_size//10, 3))
+    hor_sep = np.ones((im_size//5, 27*im_size + 26*im_size//10, 3))
+
+    data = data[:, 0]
+    imgs = (data/2 + 0.5).transpose(1, 3).numpy()
+    n_blank = max(81 - len(imgs), 0)
+    img_blank = np.ones((im_size, im_size, 3))
+
+    im_list = []
+
+    for row in range(3):
+        img_tot = np.zeros((im_size, 0, 3), dtype=np.float32)
+        
+        for col in range(27):
+            if 27*row+col < len(imgs):
+                img_tot = np.concatenate([img_tot, imgs[27*row+col]], axis=1)
+            else:
+                img_tot = np.concatenate([img_tot, img_blank], axis=1)
+
+            if col < 27 - 1:
+                img_tot = np.concatenate([img_tot, vert_sep], axis=1)
+
+        if row < 3 - 1:
+            img_tot = np.concatenate([img_tot, hor_sep], axis=0)
+
+        im_list.append(img_tot)
+
+    img_tot = np.concatenate(im_list, axis=0)
+    
+    fig, axs = plt.subplots(2, 1)
+    axs[0].imshow(img_tot)
+    axs[0].tick_params(
+        axis="both",
+        which="both",
+        bottom=False,
+        left=False,
+        labelbottom=False,
+        labelleft=False
+    )
+
+    # compute internal representations on the images
+    with torch.no_grad():
+        d_list, z_list, z_hat_list = model.forward_seq(data[:82].unsqueeze(1))
+
+    # dimensionality reduction if the size of the features are bigger than 2
+    if z_list[0].shape[-1] > 2:
+        ... # reduce dimension with some algorithm
+        raise Warning("dimension of the hidden states was reduced to 2 for"
+                      "plotting")
+
+
+
+    cm1 = plt.get_cmap("Oranges")
+    colors1 = cm1(np.arange(81))
+    xs1 = [z[0, 0, 0] for z in z_list]
+    ys1 = [z[0, 0, 1] for z in z_list]
+    print(xs1[0])
+    print(ys1[0])
+
+    axs[1].scatter(xs1, ys1, c=colors1)
+    
+    cm2 = plt.get_cmap("Blues")
+    colors2 = cm2(np.arange(81))
+    xs2 = [z[0, 1, 0] for z in z_hat_list]
+    ys2 = [z[0, 1, 1] for z in z_hat_list]
+
+    axs[1].scatter(xs2, ys2, c=colors2)
+
+    plt.show()
+
 
 img0 = data[0, 0].unsqueeze(0)
 img1 = data[0, 1].unsqueeze(0)

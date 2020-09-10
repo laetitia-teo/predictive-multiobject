@@ -259,7 +259,7 @@ class Env():
         img.save(name)
 
     def make_dataset(self, dt, N, path, prefix=''):
-        # test ? We just train for now ?
+        # test ds ? We just train for now ?
         Path(path).mkdir(parents=True, exist_ok=True)
         t = 0.
 

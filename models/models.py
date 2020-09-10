@@ -7,7 +7,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import util_models as utm
+try:
+    import util_models as utm
+except ModuleNotFoundError:
+    import models.util_models as utm
+
 
 ### edge index utils
 
@@ -381,7 +385,7 @@ class SlotMemIndependent(nn.Module):
         self.proj = nn.Linear(Fin + Fmem, 4 * Fmem)
         self.out_proj = nn.Linear(Fmem, Fout)
 
-    def mem_init(self, bsize):
+    def _mem_init(self, bsize):
         """
         Initializes hidden state and cell.
         """
@@ -515,7 +519,7 @@ class BaseCompleteModel(nn.Module):
     def mem_init(self, bsize):
         return self.M_psi._mem_init(bsize)
 
-    def forward(self, x1, x2, mem, n_recurrent_passes=1):
+    def forward(self, x1, x2, mem=None, n_recurrent_passes=1):
         """
         Computes the energy between x1 and x2. Usually, x1 is some state and
         x2 is some state in the future. 
@@ -523,65 +527,103 @@ class BaseCompleteModel(nn.Module):
         n_recurrent_passes denotes the number of internal recurrent steps done
         by the model before comparing x1 and x2. No input is given to the
         model.
-
-        # TODO test this
         """
+        if mem is None:
+            mem = self.mem_init(x1.shape[0])
+
         z1 = self.C_phi(x1)
         z2 = self.C_phi(x2)
 
         # z1/z2 :: [B, K, F]
 
-        _, next_mem = self.M_psi(z1, mem)
+        out, next_mem = self.M_psi(z1, mem)
 
         for _ in range(n_recurrent_passes-1):
             # do additional recurrent passes with no input
-            _, next_mem = self.M_psi(None, next_mem)
+            out, next_mem = self.M_psi(None, next_mem)
 
-            # compute distance/energy d
+        # compute distance/energy d
         if not self.model_diff:
-            d = self.Delta_xi(z2, next_mem)
+            d = self.Delta_xi(z2, out)
         else:
             # alternative: model the difference
-            d = self.Delta_xi(z2, z1 + next_mem)
+            d = self.Delta_xi(z2, z1 + out)
 
         return d, next_mem
 
-    def forward_rollout(self, x, xs):
+    def forward_seq(self, xs, mem=None):
         """
-        Computes the energy between x and a list of inputs xs.
-        The energy between x and xs[i] is computed by doing i recurrent
-        passes without input after encoding x, and comparing to the encoding
-        of x[i].
-        Returns a list of energies.
+        Computes the forward pass on the given sequence xs.
+        This is done by comparing the neighbouring elements one by one.
+
+        The sequence xs is expected as a tensor of size sequence_length, bsize,
+        etc ...
+
+        returns the sequence of distances, the sequences of encoded hidden
+        representations and the sequence of predicted hidden representations.
         """
-        # TODO: modify for tensor inputs
-        raise NotImplementedError
+        d_list = []
+        z_list = []
+        z_hat_list = []
 
-        # TODO: modify this to comply ith new slotmem interface
-        if not isinstance(xs, list):
-            xs = [xs]
+        if mem is None:
+            mem = self.mem_init(xs.shape[1])
 
-        z = self.C_phi(x)
-        # TODO paralellize the following
-        zs = [self.C_phi(y) for y in xs]
+        for i in range(len(xs) - 1):
+            z1 = self.C_phi(xs[i])
+            z2 = self.C_phi(xs[i+1])
 
-        L = len(xs)
-        mlist = [self.M_psi(z)]
+            out, mem = self.M_psi(z1, mem)
 
-        for _ in range(L-1):
-            mlist.append(self.M_psi())
+            if not self.model_diff:
+                z2_hat = out
+            else:
+                z2_hat = z1 + out
+    
+            d = self.Delta_xi(z2, z2_hat)
 
-        if not self.model_diff:
-            d = [self.Delta_xi(zz, m) for zz, m in zip(zs, mlist)]
-        else:
-            # model the difference
-            # first compute the cumulative sum of elements of mlist
-            mtensor = torch.stack(mlist, 0)
-            cumsum_mtensor = mtensor.cumsum()
-            # then model the transitions
-            d = [self.Delta_xi(zz, z + m) for zz, m in zip(zs, cumsum_mtensor)]
+            d_list.append(d)
+            z_list.append(z2)
+            z_hat_list.append(z2_hat)
 
-        return d
+        return d_list, z_list, z_hat_list
+
+    # def forward_rollout(self, x, xs):
+    #     """
+    #     Computes the energy between x and a list of inputs xs.
+    #     The energy between x and xs[i] is computed by doing i recurrent
+    #     passes without input after encoding x, and comparing to the encoding
+    #     of x[i].
+    #     Returns a list of energies.
+    #     """
+    #     # TODO: modify for tensor inputs
+    #     raise NotImplementedError
+
+    #     # TODO: modify this to comply ith new slotmem interface
+    #     if not isinstance(xs, list):
+    #         xs = [xs]
+
+    #     z = self.C_phi(x)
+    #     # TODO paralellize the following
+    #     zs = [self.C_phi(y) for y in xs]
+
+    #     L = len(xs)
+    #     mlist = [self.M_psi(z)]
+
+    #     for _ in range(L-1):
+    #         mlist.append(self.M_psi())
+
+    #     if not self.model_diff:
+    #         d = [self.Delta_xi(zz, m) for zz, m in zip(zs, mlist)]
+    #     else:
+    #         # model the difference
+    #         # first compute the cumulative sum of elements of mlist
+    #         mtensor = torch.stack(mlist, 0)
+    #         cumsum_mtensor = mtensor.cumsum()
+    #         # then model the transitions
+    #         d = [self.Delta_xi(zz, z + m) for zz, m in zip(zs, cumsum_mtensor)]
+
+    #     return d
 
 class CompleteModel_Debug(BaseCompleteModel):
     """
@@ -662,7 +704,7 @@ def recurrent_apply(recurrent_model, seq, mem0):
 
     return torch.cat(out_list, 0)
 
-def recurrent_apply_contrastive(recurrent_model, seq, mem0):
+def recurrent_apply_contrastive(recurrent_model, seq, mem0=None):
     """
     Same as recurrent_apply, applies a recurrent model on a sequence of inputs,
     but also computes the time-contrastive term by sampling arbitrary 
@@ -672,6 +714,9 @@ def recurrent_apply_contrastive(recurrent_model, seq, mem0):
 
     mem0 is first memory.
     """
+    if mem0 is None:
+        B = seq.shape[1]
+        mem0 = recurrent_model.mem_init(B)
     N = len(seq)
     # compute randomly shuffled sequence
     rand = (torch.randint(1, N-1, (N-1,)) + torch.arange(N-1)).fmod(N-1)
