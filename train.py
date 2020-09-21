@@ -49,7 +49,7 @@ from models.dataset import ImageDs
 ### Constants
 
 N_EPOCHS = 100
-BATCH_SIZE = 8
+BATCH_SIZE = 16
 L_RATE = 1e-3
 INPUT_DIMS = (100, 100, 3)
 K = 2
@@ -60,7 +60,7 @@ N_HEADS = 1
 BETA = 1. # multiplicative factor for g function
 CLIP_GRAD = 1e-3 # ?
 
-MAX_SAMPLES = 1 # to control the overfitting regime
+MAX_SAMPLES = 64 # to control the overfitting regime
 
 DEBUG = True # results go in DEBUG folder
 REDO_EXPE = False # wether to redo previous experiment
@@ -197,8 +197,8 @@ def get_grad(model):
     # gets accumulated gradients in model parameters as a single vector
     pl = []
     for p in model.parameters():
-        l.append(p.grad.reshape(-1))
-    return torch.cat(l, 0)
+        pl.append(p.grad.reshape(-1))
+    return torch.cat(pl, 0)
 
 def norm2(v):
     return ((v**2).sum())**.5
@@ -222,11 +222,12 @@ datapath = op.join("data", "two_spheres")
 savepath = op.join("saves", args.task, str(EXPE_IDX))
 logpath = op.join("saves", args.task, str(EXPE_IDX), "log.txt")
 
-# create save directory if it doesn't exist
-Path(savepath).mkdir(parents=True, exist_ok=True)
-
 ds = ImageDs(path=datapath, seq_limit=100, max_samples=MAX_SAMPLES)
 dl = DataLoader(ds, shuffle=True, batch_size=int(args.bsize))
+# datasets with one motionless ball
+dstest = ImageDs(path=datapath, seq_limit=100, max_samples=MAX_SAMPLES, 
+                 load_prefix="test")
+dltest = DataLoader(dstest, shuffle=True, batch_size=int(args.bsize))
 
 # Define models and optimizer
 model = mod.CompleteModel_Debug(K, F_MEM, HIDDEN_DIM, (30, 30, 3), N_HEADS)
@@ -254,7 +255,13 @@ info = {
     'grads': []
 }
 
-def run():
+def run(dataloader=None):
+    # create save directory if it doesn't exist
+    Path(savepath).mkdir(parents=True, exist_ok=True)
+
+    if dataloader is None:
+        dataloader = dl
+
     s = input(f"Please enter a short description for this run ({EXPE_IDX})")
     log(f"Experiment {EXPE_IDX}.", logpath)
     log(get_description(), logpath)
@@ -271,7 +278,7 @@ def run():
     for epoch in range(int(args.N)):
         log(f"\nbeginning epoch {epoch}\n", logpath)
 
-        run_epoch(dl, model, opt, g_func, savepath, logpath, info)
+        run_epoch(dataloader, model, opt, g_func, savepath, logpath, info)
         
         save_model(model, op.join(savepath, "model.pt"))
         log(
@@ -357,6 +364,51 @@ def plot_fmaps(model, data):
         axs[i+1].matshow(fmap[i])
 
     plt.show()
+
+def plot_image_sequence(data):
+    """
+    Plots the sequence of images in a 9x9 grid.
+    """
+    im_size = 30
+    vert_sep = np.ones((im_size, im_size//10, 3))
+    hor_sep = np.ones((im_size//10, 9*im_size + 8*im_size//10, 3))
+
+    data = data[:, 0]
+    imgs = (data/2 + 0.5).transpose(1, 3).numpy()
+    n_blank = max(81 - len(imgs), 0)
+    img_blank = np.ones((im_size, im_size, 3))
+
+    im_list = []
+
+    for row in range(9):
+        img_tot = np.zeros((im_size, 0, 3), dtype=np.float32)
+        
+        for col in range(9):
+            if 9*row+col < len(imgs):
+                img_tot = np.concatenate([img_tot, imgs[9*row+col]], axis=1)
+            else:
+                img_tot = np.concatenate([img_tot, img_blank], axis=1)
+
+            if col < 9 - 1:
+                img_tot = np.concatenate([img_tot, vert_sep], axis=1)
+
+        if row < 9 - 1:
+            img_tot = np.concatenate([img_tot, hor_sep], axis=0)
+
+        im_list.append(img_tot)
+
+    img_tot = np.concatenate(im_list, axis=0)
+
+    plt.imshow(img_tot)
+    plt.tick_params(
+        axis="both",
+        which="both",
+        bottom=False,
+        left=False,
+        labelbottom=False,
+        labelleft=False
+    )
+    plt.show()    
 
 def plot_image_sequence_and_hidden_representations(model, data):
     """
@@ -454,6 +506,29 @@ def plot_image_sequence_and_hidden_representations(model, data):
 
     plt.show()
 
+def plot_grid_encoded(model, grid_idx=0):
+    # load grid
+    gridds = ImageDs(
+        "data/two_spheres",
+        seq_limit=100,
+        max_samples=MAX_SAMPLES,
+        load_prefix=f"grid{grid_idx}"
+    )    
+    data = gridds[0]
+    with torch.no_grad():
+        zs = model.C_phi(data)
+    colors = np.arange(81)
+    
+    cm1 = plt.get_cmap("Blues")
+    cm2 = plt.get_cmap("Oranges")
+
+    z1s = zs[:, 0]
+    z2s = zs[:, 1]
+
+    plt.scatter(z1s[:, 0], z1s[:, 1], c=cm1(colors))
+    plt.scatter(z2s[:, 0], z2s[:, 1], c=cm2(colors))
+
+    plt.show()
 
 img0 = data[0, 0].unsqueeze(0)
 img1 = data[0, 1].unsqueeze(0)

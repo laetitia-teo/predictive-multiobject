@@ -102,7 +102,7 @@ class CNN_nopool(nn.Module):
             if i == n_layers - 2:
                 f_out = out_ch
 
-        layers.pop(-1) # pop las relu
+        layers.pop(-1) # pop last relu
 
         self.net = nn.Sequential(*layers)
 

@@ -147,6 +147,85 @@ class SimpleEncoder(nn.Module):
         zs = self.mlp(zs)
         return zs
 
+class RecurrentSlotAttention(nn.Module):
+    """
+    Insipred by Kipf's last paper. After a convolutional net, a feature map
+    is produced. The model holds a set of slots as internal state. Each of the
+    slots attends to each of the pixels of the feature map to produce an
+    attention weight (with the classical dot-product-attention), that is
+    softmax-normalized over all slots. The new slot is the weighted mean of all
+    slots in the feature map, weighted by their attention weights. This slot 
+    will be used in the next iteration.
+
+    The softmaxing over slots ensures competition between slots and provides
+    an inductive bias towards specialization over slots.
+
+    Arguments:
+        - in_ch: number of input channels, usually 3;
+        - inter_ch: number of internal channels for the convnet;
+        - out_ch: number of output channels/features for the slots;
+        - in_size: size of the height/width of the inpu image;
+        - K: number of slots.
+    """
+    def __init__(self, in_ch, inter_ch, out_ch, in_size, K, n_layers=5):
+        super().__init__()
+
+        self.K = K
+        self.out_ch = out_ch
+        self.in_size = in_size
+
+        self.conv = utm.CNN_nopool(in_ch, inter_ch, out_ch, n_layers)
+        self.q_proj = nn.Linear(out_ch, out_ch)
+        self.k_proj = nn.Linear((out_ch + 2), out_ch)
+        self.v_proj = nn.Linear((out_ch + 2), out_ch)
+        
+        self.register_buffer("zs", None)
+
+        lin = torch.linspace(-1, 1, in_size // 2)
+        grid = torch.stack(torch.meshgrid(lin, lin), -1)
+        self.register_buffer("grid", grid)
+
+    def z_init(self, B):
+        """
+        Initialize slots. They are drawn from a multidimensional, standard,
+        centered, normal distribution. B is the batch size.
+        """
+        means = torch.zeros(B, self.K, self.out_ch)
+        stds = torch.ones(B, self.K, self.out_ch)
+        zs = torch.normal(means, stds)
+
+        self.register_buffer("zs", zs)
+
+    def forward(self, x):
+        B = x.shape[0]
+        S = self.in_size // 2
+        F = self.out_ch
+
+        if self.zs is None:
+            self.z_init(B)
+
+        fmap = self.conv(x).transpose(1, 2)
+        Bgrid = self.grid.expand(B, S, S, 2).reshape(B, S**2, 2)
+        fmap = torch.cat([fmap, Bgrid], -1)
+        # fmap = torch.reshape(B, S**2, F+2)
+
+        scaling = float(F) ** -0.5
+        q = self.q_proj(self.zs) * scaling
+        k = self.k_proj(fmap)
+        v = self.v_proj(fmap)
+
+        aw = q @ k.transpose(1, 2)
+        aw = torch.softmax(aw, dim=1)
+
+        zs = aw @ v / aw.sum(-1, keepdim=True)
+
+        self.register_buffer("zs", zs)
+
+        return zs
+
+# img = torch.rand(8, 3, 30, 30)
+# m = RecurrentSlotAttention(3, 32, 64, 30, 2)
+
 ### Slot-Memory
 
 class SelfAttentionLayer(nn.Module):
@@ -527,6 +606,11 @@ class BaseCompleteModel(nn.Module):
         n_recurrent_passes denotes the number of internal recurrent steps done
         by the model before comparing x1 and x2. No input is given to the
         model.
+
+        TODO: some implems of C_phi are recurrent. For now, we let the
+        formulation of the computation as is and cache the recurrence inside
+        the state of the C_phi model. If we continue using it, we may want to
+        make sure the structure of the computation makes this explicit.
         """
         if mem is None:
             mem = self.mem_init(x1.shape[0])

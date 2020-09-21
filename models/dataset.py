@@ -18,13 +18,23 @@ class ImageDs(Dataset):
 
     We assume everything fits into memory.
     """
-    def __init__(self, path, gpu=False, seq_limit=None, max_samples=8):
+    def __init__(self, path, gpu=False, seq_limit=None, max_samples=8,
+                 load_prefix=None):
         
+        self.seq_limit = seq_limit
+        self.max_samples = max_samples
+
         if gpu:
             self.device = torch.device('cuda')
         else:
             self.device = torch.device('cpu')
+        
+        if load_prefix is None:
+            self.load_data(path)
+        else:
+            self.load_data_only_prefix(path, load_prefix)
 
+    def load_data(self, path):
         # load data
         l = os.listdir(path)
         
@@ -38,10 +48,10 @@ class ImageDs(Dataset):
         # get nb of datapoints and sequence size
         self.N_samples = max(indices(s)[0] for s in l) + 1
         self.T = max(indices(s)[1] for s in l) + 1
-        if seq_limit is not None:
-            self.T = min(seq_limit, self.T)
-        if max_samples is not None:
-            self.N_samples = min(max_samples, self.N_samples)
+        if self.seq_limit is not None:
+            self.T = min(self.seq_limit, self.T)
+        if self.max_samples is not None:
+            self.N_samples = min(self.max_samples, self.N_samples)
         # get image dims
         img = Image.open(op.join(path, l[0]))
         img = np.array(img).astype(np.float32)
@@ -63,6 +73,43 @@ class ImageDs(Dataset):
 
         self.data = t.to(self.device)
 
+    def load_data_only_prefix(self, path, prefix):
+        """
+        Loads only the data sample beginning with prefix.
+        """
+
+        l = os.listdir(path)
+
+        def indices(s):
+            r = re.search(rf"^{prefix}frame([0-9]+).png", s)
+            if r is not None:
+                return int(r[1])
+            else:
+                return -1
+
+        self.N_samples = 1
+        self.T = max(indices(s) for s in l) + 1
+        if self.seq_limit is not None:
+            self.T = min(self.seq_limit, self.T)
+        # get image dims
+        img = Image.open(op.join(path, l[0]))
+        img = np.array(img).astype(np.float32)
+        self.H, self.W, self.C = img.shape
+
+        t = torch.zeros(self.N_samples, self.T, self.C, self.H, self.W)
+        
+        print('loading dataset...')
+        for i in range(self.T):
+            img = Image.open(op.join(path, f"{prefix}frame{i}.png"))
+            img = np.array(img).astype(np.float32)
+
+            img = (img - 127.5) / 127.5
+            img = torch.from_numpy(img).permute(2, 0, 1)
+
+            t[0, i] = img
+        print('done')
+
+        self.data = t.to(self.device)
 
     def __len__(self):
         return self.N_samples

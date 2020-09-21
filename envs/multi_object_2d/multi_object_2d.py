@@ -401,6 +401,30 @@ def generate(env_type, N_samples, T, dt, path):
     with open(op.join(path, "envparams.txt"), 'w') as f:
         f.write("\n".join(paramlist))
 
+def generate_grid_two_spheres(side, object_id, path):
+    """
+    Generates a set of images where the object identified by object-id
+    is placed sucessively at all possible points of a regular grid of length
+    side. The other object stays motionless.
+    """
+    env = TwoSphereEnv()
+    objsize = env.objects[object_id].size
+
+    lin = np.linspace(0, env.envsize - 2*objsize, side)
+    grid = np.stack(np.meshgrid(lin, lin), -1)
+
+    for i in range(side):
+        for j in range(side):
+            env.objects[object_id].pos = grid[i, j]
+            env.objects[object_id].x_amp = 0.
+            env.objects[object_id].y_amp = 0.
+
+            mat = env.render()
+            env.save_frame(op.join(
+                path,
+                f"grid{object_id}frame{i*side+j}.png")
+            )
+
 ### Testing environments
 
 envdict = {
