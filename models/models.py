@@ -724,6 +724,21 @@ class CompleteModel_Debug(BaseCompleteModel):
 
         super().__init__(C_phi, M_psi, Delta_xi, model_diff=model_diff)
 
+class CompleteModel_Debug_SlotAttentionEncoder(BaseCompleteModel):
+    """
+    Same as above, but with Recurrent Slot Attention encoder model.
+    """
+    def __init__(self, K, Fmem, hidden_dim, input_dims, nheads,
+                 model_diff=True):
+        self.H, self.W, self.C = input_dims
+        self.K = K
+        
+        C_phi = RecurrentSlotAttention(3, 32, Fmem, self.H, K)
+        M_psi = SlotMemIndependent(K, hidden_dim, Fmem, Fmem)
+        Delta_xi = L2Dist()
+
+        super().__init__(C_phi, M_psi, Delta_xi, model_diff=model_diff)
+
 class CompleteModel_SlotDistance(BaseCompleteModel):
     """
     Slot-wise distance fn.
