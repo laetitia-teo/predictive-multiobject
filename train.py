@@ -48,13 +48,13 @@ from models.dataset import ImageDs
 
 ### Constants
 
-N_EPOCHS = 100
+N_EPOCHS = 1000
 BATCH_SIZE = 16
 L_RATE = 1e-3
 INPUT_DIMS = (100, 100, 3)
 K = 2
-F_MEM = 2
-HIDDEN_DIM = 512
+F_MEM = 64
+HIDDEN_DIM = 64
 N_HEADS = 1
 # EXPE_IDX = 5
 BETA = 1. # multiplicative factor for g function
@@ -62,8 +62,6 @@ CLIP_GRAD = 1e-3 # ?
 
 MAX_SAMPLES = 64 # to control the overfitting regime
 
-DEBUG = True # results go in DEBUG folder
-REDO_EXPE = False # wether to redo previous experiment
 
 ### Arguments for running training loops
 
@@ -71,14 +69,25 @@ parser = argparse.ArgumentParser()
 parser.add_argument('-t', '--task',
                     dest='task',
                     default='two_spheres')
-parser.add_argument('--N' '--n_epochs',
+parser.add_argument('-N' '--n_epochs',
                     dest='N',
                     default=N_EPOCHS)
-parser.add_argument('--B' '--batch_size',
+parser.add_argument('-B' '--batch_size',
                     dest='bsize',
                     default=BATCH_SIZE)
+parser.add_argument('-d' '--debug',
+                    dest="debug",
+                    default="False")
+parser.add_argument('-r' '--redo',
+                    dest='redo',
+                    default="False")
 
 args = parser.parse_args()
+
+# if True, results go in DEBUG folder
+DEBUG = (args.debug in ["True", "true", "1", "y"])
+# if True, results go in previous folder
+REDO_EXPE = (args.redo in ["True", "true", "1", "y"])
 
 ### Logging and file utils
 
@@ -219,28 +228,43 @@ elif REDO_EXPE:
     EXPE_IDX -= 1
 
 datapath = op.join("data", "two_spheres")
+datapath_no_move = op.join("data", "two_spheres_no_move")
+datapath_move = op.join("data", "two_spheres_move")
 savepath = op.join("saves", args.task, str(EXPE_IDX))
 logpath = op.join("saves", args.task, str(EXPE_IDX), "log.txt")
 
 # normal
-# ds = ImageDs(path=datapath, seq_limit=100, max_samples=MAX_SAMPLES)
-# dl = DataLoader(ds, shuffle=True, batch_size=int(args.bsize))
+ds = ImageDs(path=datapath, seq_limit=100, max_samples=MAX_SAMPLES)
+dl = DataLoader(ds, shuffle=True, batch_size=int(args.bsize))
 # datasets with one motionless ball
 # dstest = ImageDs(path=datapath, seq_limit=100, max_samples=MAX_SAMPLES, 
 #                  load_prefix="test")
 # dltest = DataLoader(dstest, shuffle=True, batch_size=int(args.bsize))
 # dsets with at least one motionless ball
-ds = ImageDs(path=datapath, seq_limit=100, max_samples=MAX_SAMPLES)
-dl = DataLoader(ds, shuffle=True, batch_size=int(args.bsize))
+ds_no_move = ImageDs(
+    path=datapath_no_move,
+    seq_limit=100,
+    max_samples=MAX_SAMPLES
+)
+dl_no_move = DataLoader(ds_no_move, shuffle=True, batch_size=int(args.bsize))
+ds_move = ImageDs(
+    path=datapath_no_move,
+    seq_limit=100,
+    max_samples=MAX_SAMPLES
+)
+dl_move = DataLoader(ds_move, shuffle=True, batch_size=int(args.bsize))
 
 # Define models and optimizer
 model = mod.CompleteModel_Debug(K, F_MEM, HIDDEN_DIM, (30, 30, 3), N_HEADS)
-model1 = mod.CompleteModel_SlotDistance(
-    K, F_MEM, HIDDEN_DIM, INPUT_DIMS, N_HEADS)
-model2 = mod.CompleteModel_SoftMatchingDistance(
-    K, F_MEM, HIDDEN_DIM, INPUT_DIMS, N_HEADS)
-model3 = mod.CompleteModel_HardMatchingDistance(
-    K, F_MEM, HIDDEN_DIM, INPUT_DIMS, N_HEADS)
+# model = mod.CompleteModel_Debug_SlotAttentionEncoder(
+#     K, F_MEM, HIDDEN_DIM, (30, 30, 3), N_HEADS
+# )
+# model1 = mod.CompleteModel_SlotDistance(
+#     K, F_MEM, HIDDEN_DIM, INPUT_DIMS, N_HEADS)
+# model2 = mod.CompleteModel_SoftMatchingDistance(
+#     K, F_MEM, HIDDEN_DIM, INPUT_DIMS, N_HEADS)
+# model3 = mod.CompleteModel_HardMatchingDistance(
+#     K, F_MEM, HIDDEN_DIM, INPUT_DIMS, N_HEADS)
 opt = torch.optim.Adam(model.parameters(), lr=L_RATE)
 
 # g_func = torch.nn.Identity()
@@ -259,12 +283,9 @@ info = {
     'grads': []
 }
 
-def run(dataloader=None):
+def run(dataloader):
     # create save directory if it doesn't exist
     Path(savepath).mkdir(parents=True, exist_ok=True)
-
-    if dataloader is None:
-        dataloader = dl
 
     s = input(f"Please enter a short description for this run ({EXPE_IDX})")
     log(f"Experiment {EXPE_IDX}.", logpath)
@@ -472,6 +493,9 @@ def plot_image_sequence_and_hidden_representations(model, data):
     with torch.no_grad():
         d_list, z_list, z_hat_list = model.forward_seq(data[:82].unsqueeze(1))
 
+    d_list = [d.numpy() for d in d_list]
+    z_list = [z.numpy() for z in z_list]
+    z_hat_list = [z.numpy() for z in z_hat_list]
     # dimensionality reduction if the size of the features are bigger than 2
     if z_list[0].shape[-1] > 2:
         ... # reduce dimension with some algorithm
@@ -552,3 +576,6 @@ seq80 = seq[:80]
 seq90 = seq[:90]
 seq100 = seq[:100]
 # load_model(model, "saves/two_spheres/1/model.pt")
+
+if __name__ == "__main__":
+    run(dl_move)

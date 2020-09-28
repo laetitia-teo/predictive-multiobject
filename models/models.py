@@ -194,15 +194,18 @@ class RecurrentSlotAttention(nn.Module):
         stds = torch.ones(B, self.K, self.out_ch)
         zs = torch.normal(means, stds)
 
-        self.register_buffer("zs", zs)
+        # self.zs = zs
+        # self.register_buffer("zs", zs)
+        return zs
 
-    def forward(self, x):
+    def forward(self, x, zs):
         B = x.shape[0]
         S = self.in_size // 2
         F = self.out_ch
 
-        if self.zs is None:
-            self.z_init(B)
+        # no previous memory
+        # if zs is None:
+        #     zs = self.z_init(B)
 
         fmap = self.conv(x).transpose(1, 2)
         Bgrid = self.grid.expand(B, S, S, 2).reshape(B, S**2, 2)
@@ -210,7 +213,7 @@ class RecurrentSlotAttention(nn.Module):
         # fmap = torch.reshape(B, S**2, F+2)
 
         scaling = float(F) ** -0.5
-        q = self.q_proj(self.zs) * scaling
+        q = self.q_proj(zs) * scaling
         k = self.k_proj(fmap)
         v = self.v_proj(fmap)
 
@@ -219,7 +222,8 @@ class RecurrentSlotAttention(nn.Module):
 
         zs = aw @ v / aw.sum(-1, keepdim=True)
 
-        self.register_buffer("zs", zs)
+        # self.register_buffer("zs", zs)
+        # self.zs = zs
 
         return zs
 
@@ -583,7 +587,8 @@ class BaseCompleteModel(nn.Module):
     and a distance mechanism. Subclasses of this may define the models in the
     __init__ function directly.
     """    
-    def __init__(self, C_phi, M_psi, Delta_xi, model_diff=False):
+    def __init__(self, C_phi, M_psi, Delta_xi, model_diff=False, 
+                 recurrent_encoder=False):
         super().__init__()
 
         self.model_diff = model_diff
@@ -592,11 +597,19 @@ class BaseCompleteModel(nn.Module):
         self.M_psi = M_psi
         self.Delta_xi = Delta_xi
 
+        self.recurrent_encoder = recurrent_encoder
+
     def next(self, x):
         return self.M_psi(self.C_phi(x))
 
     def mem_init(self, bsize):
-        return self.M_psi._mem_init(bsize)
+        if not self.recurrent_encoder:
+            return self.M_psi._mem_init(bsize)
+        else:
+            mem = self.M_psi._mem_init(bsize)
+            z1 = self.C_phi.z_init(bsize)
+            z2 = self.C_phi.z_init(bsize)
+            return mem, z1, z2
 
     def forward(self, x1, x2, mem=None, n_recurrent_passes=1):
         """
@@ -613,10 +626,15 @@ class BaseCompleteModel(nn.Module):
         make sure the structure of the computation makes this explicit.
         """
         if mem is None:
-            mem = self.mem_init(x1.shape[0])
+            mem = self.mem_init(x1.shape[0]) # TODO adapt mem for recurrent encoders
 
-        z1 = self.C_phi(x1)
-        z2 = self.C_phi(x2)
+        if not self.recurrent_encoder:
+            z1 = self.C_phi(x1)
+            z2 = self.C_phi(x2)
+        else:
+            mem, z1, z2 = mem
+            z1 = self.C_phi(x1, z1)
+            z2 = self.C_phi(x2, z2)
 
         # z1/z2 :: [B, K, F]
 
@@ -632,6 +650,9 @@ class BaseCompleteModel(nn.Module):
         else:
             # alternative: model the difference
             d = self.Delta_xi(z2, z1 + out)
+
+        if self.recurrent_encoder:
+            next_mem = (next_mem, z1, z2)
 
         return d, next_mem
 
@@ -737,7 +758,8 @@ class CompleteModel_Debug_SlotAttentionEncoder(BaseCompleteModel):
         M_psi = SlotMemIndependent(K, hidden_dim, Fmem, Fmem)
         Delta_xi = L2Dist()
 
-        super().__init__(C_phi, M_psi, Delta_xi, model_diff=model_diff)
+        super().__init__(C_phi, M_psi, Delta_xi, model_diff=model_diff,
+                         recurrent_encoder=True)
 
 class CompleteModel_SlotDistance(BaseCompleteModel):
     """

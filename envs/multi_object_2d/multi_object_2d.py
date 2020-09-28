@@ -275,6 +275,33 @@ class Env():
         # return env params as json string
         return json.dumps(envdict)
 
+    def make_dataset_symbolic(self, dt, N, path, prefix=''):
+        # Same as make_dataset, but we only output symbolic positions of the
+        # objects
+        Path(path).mkdir(parents=True, exist_ok=True)
+        t = 0.
+
+        data = []
+
+        for i in range(N):
+            t = t + dt
+            self.time = t
+            data.append(np.stack((
+                self.objects[0].pos,
+                self.objects[1].pos
+            ), 0))
+
+        data = np.stack(data, 0)
+        np.save(op.join(path, f"{prefix}.npy"))
+
+        envdict = dict(self.env_params)
+        envdict["dt"] = dt
+        envdict["N"] = N
+
+        # return env params as json string
+        return json.dumps(envdict)        
+
+
     def get_frame_at_time(self, t):
         """
         Returns the array image of the env at time t.
@@ -441,7 +468,7 @@ def generate_two_spheres_no_movement(T, N_samples, dt, path):
     paramlist = []
     env = TwoSphereEnv()
 
-    for n in range(2*N_samples):
+    for n in tqdm(range(2*N_samples)):
         idx = n % 2    
         env.objects[idx].x_amp = 0.
         env.objects[idx].y_amp = 0.

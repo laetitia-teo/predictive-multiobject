@@ -31,8 +31,7 @@ class ImageDs(Dataset):
         
         if load_prefix is None:
             self.load_data(path)
-        elif isinstance(load_prefix, list):
-
+        # elif isinstance(load_prefix, list):
         else:
             self.load_data_only_prefix(path, load_prefix)
 
@@ -51,7 +50,7 @@ class ImageDs(Dataset):
         # get nb of datapoints and sequence size
         if mode == "new":
             self.N_samples = max(indices(s)[0] for s in l) + 1
-        else is mode == "add":
+        elif mode == "add":
             self.N_samples += max(indices(s)[0] for s in l) + 1
 
         self.T = max(indices(s)[1] for s in l) + 1
