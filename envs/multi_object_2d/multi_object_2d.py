@@ -268,8 +268,12 @@ class Env():
             self.time = t
             self.save_frame(op.join(path, f"{prefix}frame{i}.png"))
 
+        envdict = dict(self.env_params)
+        envdict["dt"] = dt
+        envdict["N"] = N
+
         # return env params as json string
-        return json.dumps(self.env_params)
+        return json.dumps(envdict)
 
     def get_frame_at_time(self, t):
         """
@@ -424,6 +428,28 @@ def generate_grid_two_spheres(side, object_id, path):
                 path,
                 f"grid{object_id}frame{i*side+j}.png")
             )
+
+def generate_two_spheres_no_movement(T, N_samples, dt, path):
+    """
+    Generate a dataset where only one of the spheres moves at a time.
+    The even-numbered samples have the 0th object not move, the odd-numbered
+    ones have the 1st object not move.
+    """
+    # T = 200
+    # N_samples is multiplied by 2
+    # dt = 0.3 ?
+    paramlist = []
+    env = TwoSphereEnv()
+
+    for n in range(2*N_samples):
+        idx = n % 2    
+        env.objects[idx].x_amp = 0.
+        env.objects[idx].y_amp = 0.
+        paramlist.append(env.make_dataset(dt, T, path, prefix=f"sample{n}"))
+        env.reset_params()
+
+    with open(op.join(path, "envparams.txt"), 'w') as f:
+        f.write("\n".join(paramlist))
 
 ### Testing environments
 

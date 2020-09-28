@@ -222,12 +222,16 @@ datapath = op.join("data", "two_spheres")
 savepath = op.join("saves", args.task, str(EXPE_IDX))
 logpath = op.join("saves", args.task, str(EXPE_IDX), "log.txt")
 
+# normal
+# ds = ImageDs(path=datapath, seq_limit=100, max_samples=MAX_SAMPLES)
+# dl = DataLoader(ds, shuffle=True, batch_size=int(args.bsize))
+# datasets with one motionless ball
+# dstest = ImageDs(path=datapath, seq_limit=100, max_samples=MAX_SAMPLES, 
+#                  load_prefix="test")
+# dltest = DataLoader(dstest, shuffle=True, batch_size=int(args.bsize))
+# dsets with at least one motionless ball
 ds = ImageDs(path=datapath, seq_limit=100, max_samples=MAX_SAMPLES)
 dl = DataLoader(ds, shuffle=True, batch_size=int(args.bsize))
-# datasets with one motionless ball
-dstest = ImageDs(path=datapath, seq_limit=100, max_samples=MAX_SAMPLES, 
-                 load_prefix="test")
-dltest = DataLoader(dstest, shuffle=True, batch_size=int(args.bsize))
 
 # Define models and optimizer
 model = mod.CompleteModel_Debug(K, F_MEM, HIDDEN_DIM, (30, 30, 3), N_HEADS)

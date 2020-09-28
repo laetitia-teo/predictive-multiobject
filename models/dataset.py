@@ -31,11 +31,14 @@ class ImageDs(Dataset):
         
         if load_prefix is None:
             self.load_data(path)
+        elif isinstance(load_prefix, list):
+
         else:
             self.load_data_only_prefix(path, load_prefix)
 
-    def load_data(self, path):
+    def load_data(self, path, mode="new"):
         # load data
+        # mode can be "new" or "append"
         l = os.listdir(path)
         
         def indices(s):
@@ -46,12 +49,22 @@ class ImageDs(Dataset):
                 return -1, -1
 
         # get nb of datapoints and sequence size
-        self.N_samples = max(indices(s)[0] for s in l) + 1
+        if mode == "new":
+            self.N_samples = max(indices(s)[0] for s in l) + 1
+        else is mode == "add":
+            self.N_samples += max(indices(s)[0] for s in l) + 1
+
         self.T = max(indices(s)[1] for s in l) + 1
+
         if self.seq_limit is not None:
-            self.T = min(self.seq_limit, self.T)
+            if mode == "new":
+                self.T = min(self.seq_limit, self.T)
+            elif mode == "add":
+                self.T = min(self.seq_limit, self.T)
+        
         if self.max_samples is not None:
             self.N_samples = min(self.max_samples, self.N_samples)
+
         # get image dims
         img = Image.open(op.join(path, l[0]))
         img = np.array(img).astype(np.float32)
@@ -73,7 +86,7 @@ class ImageDs(Dataset):
 
         self.data = t.to(self.device)
 
-    def load_data_only_prefix(self, path, prefix):
+    def load_data_only_prefix(self, path, prefix, mode="new"):
         """
         Loads only the data sample beginning with prefix.
         """
@@ -87,10 +100,15 @@ class ImageDs(Dataset):
             else:
                 return -1
 
-        self.N_samples = 1
+        if mode == "new":
+            self.N_samples = 1
+        elif mode == "add":
+            self.N_samples += 1
+
         self.T = max(indices(s) for s in l) + 1
         if self.seq_limit is not None:
             self.T = min(self.seq_limit, self.T)
+        
         # get image dims
         img = Image.open(op.join(path, l[0]))
         img = np.array(img).astype(np.float32)
@@ -109,7 +127,10 @@ class ImageDs(Dataset):
             t[0, i] = img
         print('done')
 
-        self.data = t.to(self.device)
+        if mode == "new":
+            self.data = t.to(self.device)
+        elif mode == "add":
+            self.data = torch.cat([self.data, t.to(self.device)], 0)
 
     def __len__(self):
         return self.N_samples
