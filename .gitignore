@@ -1,7 +1,13 @@
+# compiled
 *__pycache__
 *.pyc
+
+# data
 *.jpeg
 *.png
+*.hdf5
+
+# data and logs
 data
 saves
 local
