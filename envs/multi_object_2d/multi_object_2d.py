@@ -3,6 +3,7 @@ This file defines the 2d environment with moving objects.
 
 At first, the env can contain up to 5 objects of different colors.
 """
+import h5py
 import os.path as op
 import json
 import numpy as np
@@ -275,6 +276,29 @@ class Env():
         # return env params as json string
         return json.dumps(envdict)
 
+    def make_sequence(self, dt, N):
+        # create sequence with two frames per obs
+        mat = np.zeros((N, self.L, self.L, 6))
+        matnext = np.zeros((N, self.L, self.L, 6))
+        t = 0.
+        self.time = t
+        # self.reset_time()
+        # frame1 = 
+        for n in range(N):
+            # obs
+            mat[n, ..., :3] = self.render()
+            self.time += dt
+            mat[n, ..., 3:] = self.render()
+            self.time += dt
+            
+            # next obs
+            matnext[n, ..., :3] = self.render()
+            self.time += dt
+            matnext[n, ..., 3:] = self.render()
+            self.time += dt
+
+        return mat, matnext
+
     def make_dataset_symbolic(self, dt, N, path, prefix=''):
         # Same as make_dataset, but we only output symbolic positions of the
         # objects
@@ -417,7 +441,38 @@ class TwoSphereScreenEnv(TwoSphereEnv):
         screen = Square(8., COLORS['black'], (2., 2.), 0.)
         self.objects.append(screen)
 
+
 ### Generating datasets
+
+def generate_hdf5(env_type, N_samples, T, dt, fname):
+    """
+    Generates N_samples data points and saves them as an hdf5 file, with a 
+    subgroup per sequence.
+    """
+
+    paramlist = []
+    
+    # sequences = {}
+    f = h5py.File(fname, 'w')
+    for n in range(N_samples):
+        # random parameters for environment
+        env = env_type()
+        mat, matnext = env.make_sequence(dt, T)
+        f.create_dataset(op.join(str(n), "obs"), data=mat)
+        f.create_dataset(op.join(str(n), "next_obs"), data=matnext)
+
+
+def load_hdf5(fname):
+    """Restore dictionary containing numpy arrays from h5py file."""
+    data = []
+
+    with h5py.File(fname, 'r') as f:
+        for i, grp in enumerate(f.keys()):
+            data.append({})
+            for key in f[grp].keys():
+                data[i][key] = f[grp][key][:]
+    return data
+
 
 def generate(env_type, N_samples, T, dt, path):
     
@@ -431,6 +486,7 @@ def generate(env_type, N_samples, T, dt, path):
 
     with open(op.join(path, "envparams.txt"), 'w') as f:
         f.write("\n".join(paramlist))
+
 
 def generate_grid_two_spheres(side, object_id, path):
     """
@@ -456,6 +512,7 @@ def generate_grid_two_spheres(side, object_id, path):
                 f"grid{object_id}frame{i*side+j}.png")
             )
 
+
 def generate_two_spheres_no_movement(T, N_samples, dt, path):
     """
     Generate a dataset where only one of the spheres moves at a time.
@@ -477,6 +534,7 @@ def generate_two_spheres_no_movement(T, N_samples, dt, path):
 
     with open(op.join(path, "envparams.txt"), 'w') as f:
         f.write("\n".join(paramlist))
+
 
 ### Testing environments
 

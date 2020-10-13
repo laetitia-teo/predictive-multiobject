@@ -44,7 +44,7 @@ import models.models as mod
 #                            CompleteModel_SoftMatchingDistance,
 #                            CompleteModel_HardMatchingDistance,
 #                            recurrent_apply_contrastive)
-from models.dataset import ImageDs
+from utils.dataset import ImageDs
 
 ### Constants
 

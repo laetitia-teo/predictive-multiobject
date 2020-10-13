@@ -1,6 +1,7 @@
 """
 A small utility file for the dataset.
 """
+import h5py
 import os
 import os.path as op
 import re
@@ -11,6 +12,21 @@ import torch
 from tqdm import tqdm
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
+
+def load_hdf5(fname):
+    """Restore dictionary containing numpy arrays from h5py file."""
+    data = []
+
+    with h5py.File(fname, 'r') as f:
+        for i, grp in enumerate(f.keys()):
+            data.append({})
+            for key in f[grp].keys():
+                data[i][key] = f[grp][key][:]
+    return data
+
+def transpose_transform(np_array):
+    a = np.transpose(np_array, (2, 0, 1))
+    return a.astype(np.float32)
 
 class ImageDs(Dataset):
     """
@@ -179,3 +195,33 @@ class ChunkImageDS2(Dataset):
 
     def __getitem__(self, i):
         raise NotImplementedError
+
+class TransitionDataset(Dataset):
+    """
+    Dataset class for simple transitions.
+    """
+    def __init__(self, fname):
+        self.data = load_hdf5(fname)
+
+        # Build table for conversion between linear idx -> episode/step idx
+        self.idx2episode = list()
+        step = 0
+        for ep in range(len(self.data)):
+            num_steps = len(self.data[ep]['obs'])
+            idx_tuple = [(ep, idx) for idx in range(num_steps)]
+            self.idx2episode.extend(idx_tuple)
+            step += num_steps
+
+        self.num_steps = step
+
+    def __len__(self):
+        return self.num_steps
+
+    def __getitem__(self, idx):
+        ep, step = self.idx2episode[idx]
+
+        obs = transpose_transform(self.data[ep]['obs'][step])
+        next_obs = transpose_transform(self.data[ep]['next_obs'][step])
+
+        return obs, next_obs
+

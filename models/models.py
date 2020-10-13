@@ -374,6 +374,7 @@ class SlotMem(nn.Module):
 
     We have two choices for what vectors we use for the self-attention update:
     hidden vectors of cells. We'll use cells here, but that may not be the best
+
     choice.
 
     The model only does one forward pass on the sequence.
