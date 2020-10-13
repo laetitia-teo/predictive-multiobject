@@ -6,7 +6,7 @@ The original code, on which this file is based on is available under:
 https://github.com/seuqaj114/paig/blob/master/nn/datasets/generators.py
 """
 
-
+import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
@@ -85,7 +85,7 @@ def generate_3_body_problem_dataset(dest,
                                     vy0_max=0.0,
                                     color=False,
                                     cifar_background=False,
-                                    ode_steps=10,
+                                    ode_steps=20,
                                     seed=0):
     np.random.seed(seed)
 
@@ -98,7 +98,7 @@ def generate_3_body_problem_dataset(dest,
     from skimage.transform import resize
 
     if img_size is None:
-        img_size = [32, 32]
+        img_size = [30, 30]
     scale = 10
     scaled_img_size = [img_size[0] * scale, img_size[1] * scale]
 
@@ -109,6 +109,7 @@ def generate_3_body_problem_dataset(dest,
         collision = True
         while collision == True:
             seq = []
+            metadata = {}
 
             cm_pos = np.random.rand(2)
             cm_pos = np.array(img_size) / 2
@@ -133,6 +134,10 @@ def generate_3_body_problem_dataset(dest,
             vels = [[np.cos(angle) * vx0_max + noise[0],
                      np.sin(angle) * vy0_max + noise[1]] for angle in angles]
             vels = np.array(vels)
+
+            # record starting positions and velocities
+            metadata["vels"] = vels
+            metadata["poss"] = poss
 
             if cifar_background:
                 cifar_img = x_train[np.random.randint(50000)]
@@ -193,31 +198,38 @@ def generate_3_body_problem_dataset(dest,
                 if collision:
                     break
 
-        return seq
+        return seq, metadata
 
-    sequences = []
-    for i in range(train_set_size + valid_set_size + test_set_size):
-        if i % 100 == 0:
-            print(i)
-        sequences.append(generate_sequence())
-    sequences = np.array(sequences, dtype=np.uint8)
+        f = f = h5py.File(dest, 'w')
+        for n in range(train_set_size):
+            mat, metadata = generate_sequence()
+            f.create_dataset(str(n), data=mat)
+            for key, value in metadata.items():
+                f[str(n)].attrs[key] = value
 
-    np.savez_compressed(dest,
-                        train_x=sequences[:train_set_size],
-                        valid_x=sequences[
-                                train_set_size:train_set_size + valid_set_size],
-                        test_x=sequences[train_set_size + valid_set_size:])
-    print("Saved to file %s" % dest)
-
-    # Save 10 samples
-    result = gallery(np.concatenate(sequences[:10] / 255),
-                     ncols=sequences.shape[1])
-
-    norm = plt.Normalize(0.0, 1.0)
-    fig, ax = plt.subplots(figsize=(sequences.shape[1], 10))
-    ax.imshow(np.squeeze(result), interpolation='nearest', cmap=cm.Greys_r,
-              norm=norm)
-    ax.get_xaxis().set_visible(False)
-    ax.get_yaxis().set_visible(False)
-    fig.tight_layout()
-    fig.savefig(dest.split(".")[0] + "_samples.jpg")
+    # sequences = []
+    # for i in range(train_set_size + valid_set_size + test_set_size):
+    #     if i % 100 == 0:
+    #         print(i)
+    #     sequences.append(generate_sequence())
+    # sequences = np.array(sequences, dtype=np.uint8)
+    #
+    # np.savez_compressed(dest,
+    #                     train_x=sequences[:train_set_size],
+    #                     valid_x=sequences[
+    #                             train_set_size:train_set_size + valid_set_size],
+    #                     test_x=sequences[train_set_size + valid_set_size:])
+    # print("Saved to file %s" % dest)
+    #
+    # # Save 10 samples
+    # result = gallery(np.concatenate(sequences[:10] / 255),
+    #                  ncols=sequences.shape[1])
+    #
+    # norm = plt.Normalize(0.0, 1.0)
+    # fig, ax = plt.subplots(figsize=(sequences.shape[1], 10))
+    # ax.imshow(np.squeeze(result), interpolation='nearest', cmap=cm.Greys_r,
+    #           norm=norm)
+    # ax.get_xaxis().set_visible(False)
+    # ax.get_yaxis().set_visible(False)
+    # fig.tight_layout()
+    # fig.savefig(dest.split(".")[0] + "_samples.jpg")

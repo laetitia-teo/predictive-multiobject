@@ -1,15 +1,12 @@
 """
 This file defines the 2d environment with moving objects.
-
-At first, the env can contain up to 5 objects of different colors.
 """
 import h5py
 import os.path as op
 import json
-import numpy as np
-
 import time
 import pygame
+import numpy as np
 
 from pathlib import Path
 from tqdm import tqdm
@@ -73,6 +70,15 @@ class Shape():
         # concrete atributes
         self.cond = NotImplemented
         self.shape_index = NotImplemented
+
+    def freeze(self):
+        """
+        Make the object motionless. Keeps the phase.
+        """
+        self.x_freq = 0.
+        self.x_amp = 0.
+        self.y_freq = 0.
+        self.y_amp = 0.
 
     def to_pixels(self, gridsize):
         """
@@ -206,6 +212,9 @@ class Env():
 
         self.env_params = {}
 
+    def get_metadata(self):
+        return self.env_params
+
     def render(self):
         """
         Renders the environment, returns a rasterized image as a numpy array.
@@ -277,13 +286,24 @@ class Env():
         return json.dumps(envdict)
 
     def make_sequence(self, dt, N):
-        # create sequence with two frames per obs
+        # create a sequence with two frames per obs
+        mat = np.zeros((N, self.L, self.L, 6))
+        t = 0.
+        self.time = t
+        for n in range(N):
+            mat[n, ..., :3] = self.render()
+            self.time += dt
+            mat[n, ..., 3:] = self.render()
+            self.time += dt
+
+        return mat
+
+    def make_sequence_two(self, dt, N):
+        # create two interleaved sequences with two frames per obs
         mat = np.zeros((N, self.L, self.L, 6))
         matnext = np.zeros((N, self.L, self.L, 6))
         t = 0.
         self.time = t
-        # self.reset_time()
-        # frame1 = 
         for n in range(N):
             # obs
             mat[n, ..., :3] = self.render()
@@ -375,8 +395,6 @@ class TwoSphereEnv(Env):
     and blue.
 
     The spheres don't move out of the FoV. The small one may cover the big one.
-
-    TODO: fix positions of objects so they don't depend on the size
     """
     def __init__(self, gridsize=3, envsize=10):
 
@@ -535,6 +553,42 @@ def generate_two_spheres_no_movement(T, N_samples, dt, path):
     with open(op.join(path, "envparams.txt"), 'w') as f:
         f.write("\n".join(paramlist))
 
+def generate_two_sphere_dataset(dest,
+                                train_set_size,
+                                seq_len,
+                                mode='simple',
+                                img_size=None,
+                                dt=0.3,
+                                seed=0,
+                                **kwargs):
+
+    # possible modes are 'simple', 'indep', 'indep_partial'
+    np.random.seed(seed)
+
+    env_type = TwoSphereEnv
+
+    # generate dataset
+    f = h5py.File(dest, 'w')
+    for n in range(train_set_size):
+        # random parameters for environment
+        env = env_type()
+        if mode == "indep":
+            if np.random.random() < 0.5:
+                env.objects[0].freeze()
+            else:
+                env.objects[1].freeze()
+        if mode == "indep_partial":
+            r = np.random.random()
+            if r < 1/3:
+                env.objects[0].freeze()
+            elif r < 2/3:
+                env.objects[1].freeze()
+
+        mat = env.make_sequence(dt, seq_len)
+        f.create_dataset(str(n), data=mat)
+        # record metadata
+        for key, value in env.get_metadata().items():
+            f[str(n)].attrs[key] = value
 
 ### Testing environments
 
