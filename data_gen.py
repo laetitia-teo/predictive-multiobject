@@ -7,9 +7,8 @@ import numpy as np
 
 from utils.utils import save_list_dict_h5py
 
-from ..envs.multi_object_2d.multi_object_2d import generate_two_sphere_dataset
-from ..envs.three_body_physics.physics_sim import \
-    generate_3_body_problem_dataset
+from envs.multi_object_2d.multi_object_2d import generate_two_sphere_dataset
+from envs.three_body_physics.physics_sim import generate_3_body_problem_dataset
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--fname', type=str,
