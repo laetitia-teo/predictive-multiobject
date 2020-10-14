@@ -25,7 +25,9 @@ parser.add_argument('--task', type=str,
                     help='What dataset to generate.')
 parser.add_argument('--seq-len', type=int, default=20,
                     help='Length of the generated sequences.')
-
+parser.add_argument('--occluder', type=bool, default=False,
+                    help='whether or not to add an occluder at the center of the'
+                         'scene')
 
 args = parser.parse_args()
 
@@ -33,42 +35,49 @@ np.random.seed(args.seed)
 
 if args.task == "two-sphere-simple":
     generate_two_sphere_dataset(
-        dest=args.fname,
+        dest=args.fname + '.hdf5',
         train_set_size=args.num_episodes,
+        seq_len=20,
         mode="simple",
         img_size=[30, 30],
         dt=0.3,
-        seed=args.seed
+        seed=args.seed,
+        occluder=args.occluder
     )
 elif args.task == "two-sphere-indep":
     generate_two_sphere_dataset(
-        dest=args.fname,
+        dest=args.fname + '.hdf5',
         train_set_size=args.num_episodes,
+        seq_len=20,
         mode="indep",
         img_size=[30, 30],
         dt=0.3,
-        seed=args.seed
+        seed=args.seed,
+        occluder=args.occluder
     )
 elif args.task == "two-sphere-indep-partial":
     generate_two_sphere_dataset(
-        dest=args.fname,
+        dest=args.fname + '.hdf5',
         train_set_size=args.num_episodes,
+        seq_len=20,
         mode="indep_partial",
         img_size=[30, 30],
         dt=0.3,
-        seed=args.seed
+        seed=args.seed,
+        occluder=args.occluder
     )
-elif args.task == "tree-body-physics":
+elif args.task == "three-body-physics":
     generate_3_body_problem_dataset(
-        dest=args.fname + '.npz',
+        dest=args.fname + '.hdf5',
         train_set_size=args.num_episodes,
         valid_set_size=2,
         test_set_size=2,
         seq_len=args.seq_len,
-        img_size=[50, 50],
+        img_size=[30, 30],
         dt=2.0,
         vx0_max=0.5,
         vy0_max=0.5,
         color=True,
-        seed=args.seed
+        seed=args.seed,
+        occluder=args.occluder
     )

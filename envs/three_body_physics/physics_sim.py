@@ -75,7 +75,7 @@ def generate_3_body_problem_dataset(dest,
                                     train_set_size,
                                     valid_set_size,
                                     test_set_size,
-                                    seq_len,
+                                    seq_len=20,
                                     img_size=None,
                                     radius=3,
                                     dt=0.3,
@@ -85,8 +85,12 @@ def generate_3_body_problem_dataset(dest,
                                     vy0_max=0.0,
                                     color=False,
                                     cifar_background=False,
-                                    ode_steps=20,
-                                    seed=0):
+                                    ode_steps=10,
+                                    seed=0,
+                                    occluder=False,
+                                    **kwargs):
+    # NB: this physics rollout includes collision with the walls (for making
+    # sure the objects stay in fov)
     np.random.seed(seed)
 
     if cifar_background:
@@ -102,110 +106,125 @@ def generate_3_body_problem_dataset(dest,
     scale = 10
     scaled_img_size = [img_size[0] * scale, img_size[1] * scale]
 
-    def generate_sequence():
+
+    def generate_sequence(occluder=False):
         # sample initial position of the center of mass, then sample
         # position of each object relative to that.
 
-        collision = True
-        while collision == True:
-            seq = []
-            metadata = {}
+        # collision = True
+        # while collision == True:
+        seq = []
+        metadata = {}
 
-            cm_pos = np.random.rand(2)
-            cm_pos = np.array(img_size) / 2
-            angle1 = np.random.rand() * 2 * np.pi
-            angle2 = angle1 + 2 * np.pi / 3 + (np.random.rand() - 0.5) / 2
-            angle3 = angle1 + 4 * np.pi / 3 + (np.random.rand() - 0.5) / 2
+        if occluder:
+            ocpos = np.array(img_size) / 2
+            ocradius = 10.
+            metadata["ocradius"] = ocradius
 
-            angles = [angle1, angle2, angle3]
-            # calculate position of both objects
-            r = (np.random.rand() / 2 + 0.75) * img_size[0] / 4
-            poss = [
-                [np.cos(angle) * r + cm_pos[0], np.sin(angle) * r + cm_pos[1]]
-                for angle in angles]
-            poss = np.array(poss)
+        cm_pos = np.random.rand(2)
+        cm_pos = np.array(img_size) / 2
+        angle1 = np.random.rand() * 2 * np.pi
+        angle2 = angle1 + 2 * np.pi / 3 + (np.random.rand() - 0.5) / 2
+        angle3 = angle1 + 4 * np.pi / 3 + (np.random.rand() - 0.5) / 2
 
-            # angles = np.random.rand(3)*2*np.pi
-            # vels = [[np.cos(angle)*vx0_max, np.sin(angle)*vy0_max] for angle in angles]
-            # vels = np.array(vels)
-            r = np.random.randint(0, 2) * 2 - 1
-            angles = [angle + r * np.pi / 2 for angle in angles]
-            noise = np.random.rand(2) - 0.5
-            vels = [[np.cos(angle) * vx0_max + noise[0],
-                     np.sin(angle) * vy0_max + noise[1]] for angle in angles]
-            vels = np.array(vels)
+        angles = [angle1, angle2, angle3]
+        # calculate position of both objects
+        r = (np.random.rand() / 2 + 0.75) * img_size[0] / 4
+        poss = [
+            [np.cos(angle) * r + cm_pos[0], np.sin(angle) * r + cm_pos[1]]
+            for angle in angles]
+        poss = np.array(poss)
 
-            # record starting positions and velocities
-            metadata["vels"] = vels
-            metadata["poss"] = poss
+        # angles = np.random.rand(3)*2*np.pi
+        # vels = [[np.cos(angle)*vx0_max, np.sin(angle)*vy0_max] for angle in angles]
+        # vels = np.array(vels)
+        r = np.random.randint(0, 2) * 2 - 1
+        angles = [angle + r * np.pi / 2 for angle in angles]
+        noise = np.random.rand(2) - 0.5
+        vels = [[np.cos(angle) * vx0_max + noise[0],
+                 np.sin(angle) * vy0_max + noise[1]] for angle in angles]
+        vels = np.array(vels)
 
+        # record starting positions and velocities
+        metadata["vels"] = vels
+        metadata["poss"] = poss
+
+        if cifar_background:
+            cifar_img = x_train[np.random.randint(50000)]
+
+        for i in range(seq_len*2):
+            # we multiply by two the sequence length to concatenate successive
+            # frames
             if cifar_background:
-                cifar_img = x_train[np.random.randint(50000)]
-
-            for i in range(seq_len):
-                if cifar_background:
-                    frame = cifar_img
-                    frame = rgb2gray(frame) / 255
-                    frame = resize(frame, scaled_img_size)
-                    frame = np.clip(frame - 0.2, 0.0, 1.0)  # darken image a bit
+                frame = cifar_img
+                frame = rgb2gray(frame) / 255
+                frame = resize(frame, scaled_img_size)
+                frame = np.clip(frame - 0.2, 0.0, 1.0)  # darken image a bit
+            else:
+                if color:
+                    frame = np.zeros(scaled_img_size + [3],
+                                     dtype=np.float32)
                 else:
-                    if color:
-                        frame = np.zeros(scaled_img_size + [3],
-                                         dtype=np.float32)
-                    else:
-                        frame = np.zeros(scaled_img_size + [1],
-                                         dtype=np.float32)
+                    frame = np.zeros(scaled_img_size + [1],
+                                     dtype=np.float32)
 
-                for j, pos in enumerate(poss):
-                    rr, cc = circle(int(pos[1] * scale), int(pos[0] * scale),
-                                    radius * scale, scaled_img_size)
-                    if color:
-                        frame[rr, cc, 2 - j] = 1.0
-                    else:
-                        frame[rr, cc, 0] = 1.0
+            for j, pos in enumerate(poss):
+                rr, cc = circle(int(pos[1] * scale), int(pos[0] * scale),
+                                radius * scale, scaled_img_size)
+                if color:
+                    frame[rr, cc, 2 - j] = 1.0
+                else:
+                    frame[rr, cc, 0] = 1.0
 
-                frame = resize(frame, img_size, anti_aliasing=True)
-                frame = (frame * 255).astype(np.uint8)
+            if occluder:
+                # TODO: check it actually occludes
+                orr, occ = circle(int(ocpos[1] * scale), int(ocpos[0] * scale),
+                                ocradius * scale, scaled_img_size)
+                frame[orr, occ] = 1.0
 
+            frame = resize(frame, img_size, anti_aliasing=True)
+            frame = (frame * 255).astype(np.uint8)
+
+            if i % 2 == 0:
                 seq.append(frame)
+            else:
+                seq[-1] = np.concatenate((seq[-1], frame), axis=-1)
 
-                # rollout physics
-                for _ in range(ode_steps):
-                    norm01 = np.linalg.norm(poss[0] - poss[1])
-                    norm12 = np.linalg.norm(poss[1] - poss[2])
-                    norm20 = np.linalg.norm(poss[2] - poss[0])
-                    vec01 = (poss[0] - poss[1])
-                    vec12 = (poss[1] - poss[2])
-                    vec20 = (poss[2] - poss[0])
+            # rollout physics
+            for _ in range(ode_steps):
+                norm01 = np.linalg.norm(poss[0] - poss[1])
+                norm12 = np.linalg.norm(poss[1] - poss[2])
+                norm20 = np.linalg.norm(poss[2] - poss[0])
+                vec01 = (poss[0] - poss[1])
+                vec12 = (poss[1] - poss[2])
+                vec20 = (poss[2] - poss[0])
 
-                    # Compute force vectors
-                    F = [vec01 / norm01 ** 3 - vec20 / norm20 ** 3,
-                         vec12 / norm12 ** 3 - vec01 / norm01 ** 3,
-                         vec20 / norm20 ** 3 - vec12 / norm12 ** 3]
-                    F = np.array(F)
-                    F = -g * m * m * F
+                # Compute force vectors
+                F = [vec01 / norm01 ** 3 - vec20 / norm20 ** 3,
+                     vec12 / norm12 ** 3 - vec01 / norm01 ** 3,
+                     vec20 / norm20 ** 3 - vec12 / norm12 ** 3]
+                F = np.array(F)
+                F = -g * m * m * F
 
-                    vels = vels + dt / ode_steps * F
-                    poss = poss + dt / ode_steps * vels
+                vels = vels + dt / ode_steps * F
+                poss = poss + dt / ode_steps * vels
 
-                    collision = any(
-                        [verify_wall_collision(pos, vel, radius, img_size) for
-                         pos, vel in zip(poss, vels)]) or \
-                                verify_object_collision(poss, radius + 1)
-                    if collision:
-                        break
+                # verify wall collisions
+                for i in range(3):
+                    poss[i], vels[i] = compute_wall_collision(
+                        poss[i], vels[i], radius, img_size
+                    )
 
-                if collision:
-                    break
+        return np.array(seq), metadata
 
-        return seq, metadata
-
-        f = f = h5py.File(dest, 'w')
-        for n in range(train_set_size):
-            mat, metadata = generate_sequence()
-            f.create_dataset(str(n), data=mat)
-            for key, value in metadata.items():
-                f[str(n)].attrs[key] = value
+    f = f = h5py.File(dest, 'w')
+    for n in range(train_set_size):
+        if n % 100 == 0:
+            print(f"Generated {n} sequences out of {train_set_size}")
+        mat, metadata = generate_sequence(occluder)
+        f.create_dataset(str(n), data=mat)
+        for key, value in metadata.items():
+            f[str(n)].attrs[key] = value
 
     # sequences = []
     # for i in range(train_set_size + valid_set_size + test_set_size):

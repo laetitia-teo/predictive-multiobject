@@ -12,6 +12,8 @@ from pathlib import Path
 from tqdm import tqdm
 from PIL import Image
 
+from skimage.transform import resize
+
 COLOR_NAMES = ['red', 'blue', 'green', 'yellow', 'purple']
 COLORS = {
     'red': (1., 0.1, 0.1),
@@ -19,7 +21,8 @@ COLORS = {
     'green': (0.1, 1., 0.1),
     'yellow': (1., 1., 0.1),
     'purple': (1., 0.1, 1.),
-    'black': (0., 0., 0.)
+    'black': (0., 0., 0.),
+    'white': (1., 1., 1.)
 }
 
 PI = np.pi
@@ -215,20 +218,27 @@ class Env():
     def get_metadata(self):
         return self.env_params
 
-    def render(self):
+    def render(self, aa=True):
         """
         Renders the environment, returns a rasterized image as a numpy array.
         """
-        L = self.L
+        if aa:
+            scale = 4
+            L = self.L * scale
+        else:
+            scale = 1
+            L = self.L
+
+        gridsize = self.gridsize * scale
         mat = np.zeros((L, L, 3))
         l = self.L
 
         for obj in self.objects:
-            obj_mat = obj.to_pixels(self.gridsize)
+            obj_mat = obj.to_pixels(gridsize)
             s = len(obj_mat) # size of object in pixel space
 
             # base x and y pos
-            ox, oy = ((self.gridsize * obj.pos)).astype(int)
+            ox, oy = ((gridsize * obj.pos)).astype(int)
 
             # compute x and y deviation due to movement
             xm = obj.x_amp * \
@@ -236,8 +246,8 @@ class Env():
             ym = obj.y_amp * \
                 (np.sin(obj.y_freq * self.time + obj.y_phase) + 1) / 2
 
-            ox += xm * self.gridsize
-            oy += ym * self.gridsize
+            ox += xm * gridsize
+            oy += ym * gridsize
 
             # apply alpha channel
             obj_mat = obj_mat[..., :] * np.expand_dims(obj_mat[..., 3], -1)
@@ -257,6 +267,8 @@ class Env():
                 obj_mat[xminobj:xmaxobj, yminobj:ymaxobj])
         
         mat = np.flip(mat, axis=0)
+        if aa:
+            mat = resize(mat, (L//scale, L//scale, 3), anti_aliasing=True)
 
         return mat
 
@@ -356,13 +368,6 @@ class Env():
         self.time = mem
         return mat
 
-    # @static_method
-    # def from_params(self, param_dict):
-    #     """
-    #     Builds an Env instance from the passes param_dict.
-    #     """
-    #     # TODO complete.
-    #     ...
 
 # environment instances
 
@@ -396,13 +401,13 @@ class TwoSphereEnv(Env):
 
     The spheres don't move out of the FoV. The small one may cover the big one.
     """
-    def __init__(self, gridsize=3, envsize=10):
+    def __init__(self, gridsize=3, envsize=10, occluder=False):
 
         super().__init__(gridsize, envsize)
 
-        self.reset_params()
+        self.reset_params(occluder=occluder)
 
-    def reset_params(self):
+    def reset_params(self, occluder=False):
         # sample parameters for the environment
         x_freq = np.random.random(2) * TAU
         y_freq = np.random.random(2) * TAU
@@ -438,6 +443,15 @@ class TwoSphereEnv(Env):
         c2.x_phase = x_phase[1]
         c2.y_phase = y_phase[1]
         self.objects.append(c2)
+
+        if occluder:
+            # ocradius = (np.random.rand() * 6 + 6) / self.gridsize
+            ocradius = 10 / self.gridsize
+            ocpos = np.ones(2) * self.envsize / 2 - ocradius
+            occ = Circle(ocradius, COLORS['white'], ocpos, 0.)
+            occ.x_phase = 0.
+            occ.y_phase = 0.
+            self.objects.append(occ)
 
 class TwoSphereScreenEnv(TwoSphereEnv):
     """
@@ -560,6 +574,7 @@ def generate_two_sphere_dataset(dest,
                                 img_size=None,
                                 dt=0.3,
                                 seed=0,
+                                occluder=False,
                                 **kwargs):
 
     # possible modes are 'simple', 'indep', 'indep_partial'
@@ -570,8 +585,10 @@ def generate_two_sphere_dataset(dest,
     # generate dataset
     f = h5py.File(dest, 'w')
     for n in range(train_set_size):
+        if n % 100 == 0:
+            print(f"Generated {n} sequences out of {train_set_size}")
         # random parameters for environment
-        env = env_type()
+        env = env_type(occluder=occluder)
         if mode == "indep":
             if np.random.random() < 0.5:
                 env.objects[0].freeze()
