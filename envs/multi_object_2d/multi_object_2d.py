@@ -626,7 +626,8 @@ if __name__ == '__main__':
 
     X = env.L
     Y = env.L
-    dt = 1 / 30 # fps
+    # dt = 1 / 30 # fps
+    dt = 0.15
 
     framename = 'frame.jpg'
     env.save_frame(framename)

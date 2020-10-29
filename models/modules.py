@@ -123,7 +123,7 @@ class ContrastiveSWM(nn.Module):
 class TransitionGNN(torch.nn.Module):
     """GNN-based transition function."""
     def __init__(self, input_dim, hidden_dim, action_dim, num_objects,
-                 ignore_action=False, copy_action=False, act_fn='relu'):
+                 ignore_action=True, copy_action=False, act_fn='relu'):
         super(TransitionGNN, self).__init__()
 
         self.input_dim = input_dim
@@ -132,10 +132,10 @@ class TransitionGNN(torch.nn.Module):
         self.ignore_action = ignore_action
         self.copy_action = copy_action
 
-        # if self.ignore_action:
-        self.action_dim = 0
-        # else:
-        #     self.action_dim = action_dim
+        if self.ignore_action:
+            self.action_dim = 0
+        else:
+            self.action_dim = action_dim
 
         self.edge_mlp = nn.Sequential(
             nn.Linear(input_dim*2, hidden_dim),

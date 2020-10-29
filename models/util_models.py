@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 ### Misc
 
-class MLP(torch.nn.Module):
+class MLP(nn.Module):
     def __init__(self, layer_sizes):
         super().__init__()
 
@@ -28,6 +28,31 @@ class MLP(torch.nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
+class MLP_TwoLayers_Norm(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super().__init__()
+
+        layers = []
+        layers.append(nn.Linear(input_size, hidden_size))
+        layers.append(nn.ReLU())
+        layers.append(nn.Linear(hidden_size, hidden_size))
+        layers.append(nn.LayerNorm(hidden_size))
+        layers.append(nn.ReLU())
+        layers.append(nn.Linear(hidden_size, output_size))
+
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.net(x)
+
+class Identity(nn.Module):
+
+    def __init__(self):
+        pass
+
+    def forward(self, x):
+        return x
 
 ### Encoders
 

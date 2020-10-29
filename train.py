@@ -37,7 +37,7 @@ import torch.nn.functional as F
 from pathlib import Path
 from torch.utils.data import DataLoader
 
-import models.models as mod
+import models.models_ as mod
 
 # # TODO use a model dict
 # from models.models import (CompleteModel_SlotDistance,

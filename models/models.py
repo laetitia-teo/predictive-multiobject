@@ -1,907 +1,222 @@
 """
-Defines the models used for the experiments.
+Partially adapted from C-SWMs.
 """
-import numpy as np
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import numpy as np
 
-try:
-    import util_models as utm
-except ModuleNotFoundError:
-    import models.util_models as utm
+import utils.utils as utils
+import encoders as enc
+import transitions as trs
+import comparison as cmp
+import util_models as utm
 
-
-### edge index utils
-
-def get_crossgraph_ei(x, B, N1, N2):
+class Module(nn.Module):
     """
-    Gets edge indices with source the vectors in batch1 and dest the vectors
-    in batch2.
-    B: number of batches, N1: number of objects in batch1, N2: number of
-    objects in batch2.
+    This module defines the high-level model, containing the object extractor,
+    object encoder, transition model, and comparison model.
     """
-    BN1 = N1 * B
-    BN2 = N2 * B
-    
-    src = torch.arange(BN1).expand(N2, BN1).transpose(0, 1).flatten()
-    dest = torch.arange(BN2).expand(N1, BN2).view(N1, B, N2).transpose(0, 1)
-    dest = dest.flatten() + BN1
+    def __init__(self, num_slots, slot_dim, hidden_dim, input_dims, num_heads, g_func, sigma=0.5,
+                 extractor='cnn_small', relational=True, relation_type='transformer',
+                 recurrent_transition=False, comparison='pairwise_l2', training='contrastive'):
 
-    ei = torch.stack([src, dest], 0)
-    return ei
+        super().__init__()
 
-#### sparse reduction ops
+        self.num_slots = num_slots
+        self.slot_dim = slot_dim
+        self.hidden_dim = hidden_dim
+        self.input_dims = input_dims
+        self.num_heads = num_heads
+        self.g_func = g_func
+        self.sigma = sigma
 
-def scatter_sum(x, batch):
-    nbatches = batch[-1] + 1
-    nelems = len(batch)
-    fx = x.shape[-1]
-    i = torch.stack([batch, torch.arange(nelems)])
-    
-    st = torch.sparse.FloatTensor(
-        i,
-        x,
-        torch.Size([nbatches, nelems] + list(x.shape[1:])),
+        self.extractor = extractor
+        self.recurrent_transition = recurrent_transition
+        self.training = training # used outside the model
+
+        self.num_channels = input_dims[0]
+        self.width_height = input_dims[1:]
+
+        recurrent_encoder = False
+
+        if self.extractor == 'cnn_small':
+            self.obj_encoder = enc.EncoderCNNSmall(
+                input_dim=self.num_channels,
+                hidden_dim=hidden_dim // 16,
+                num_slots=num_slots,
+                slot_dim=slot_dim,
+                width_height=self.width_height
+            )
+        elif self.extractor == 'cnn_medium':
+            self.obj_encoder = enc.EncoderCNNMedium(
+                input_dim=self.num_channels,
+                hidden_dim=hidden_dim // 16,
+                num_slots=num_slots,
+                slot_dim=slot_dim,
+                width_height=self.width_height
+            )
+        elif self.extractor == 'cnn_large':
+            self.obj_encoder = enc.EncoderCNNLarge(
+                input_dim=self.num_channels,
+                hidden_dim=hidden_dim // 16,
+                num_slots=num_slots,
+                slot_dim=slot_dim,
+                width_height=self.width_height
+            )
+        elif self.extractor == 'slot_attention':
+            pass # TODO code and complete this
+
+        # TODO code the recurrent transition models
+        if not recurrent_transition and not relational:
+            self.transition_model = trs.TransitionSimple(
+                num_slots=num_slots,
+                slot_dim=slot_dim,
+                hidden_dim=hidden_dim
+            )
+        elif not recurrent_transition and relation_type == 'gnn':
+            self.transition_model = trs.TransitionSimple_GNN(
+                num_slots=num_slots,
+                slot_dim=slot_dim,
+                hidden_dim=hidden_dim
+            )
+        elif not recurrent_transition and relation_type == 'transformer':
+            self.transition_model = trs.TransitionSimple_Transformer(
+                num_slots=num_slots,
+                slot_dim=slot_dim,
+                hidden_dim=hidden_dim,
+                num_heads=num_heads,
+                num_layers=4
+            )
+        elif recurrent_transition and not relational:
+            self.transition_model = trs.TransitionRecurrent(
+                num_slots=num_slots,
+                slot_dim=slot_dim,
+                hidden_dim=hidden_dim,
+            )
+        elif recurrent_transition and relation_type == 'gnn':
+            self.transition_model = trs.TransitionRecurrent_GNN(
+                num_slots=num_slots,
+                slot_dim=slot_dim,
+                hidden_dim=hidden_dim,
+            )
+        elif recurrent_transition and relation_type == 'transformer':
+            self.transition_model = trs.TransitionRecurrent_Transformer(
+                num_slots=num_slots,
+                slot_dim=slot_dim,
+                hidden_dim=hidden_dim,
+                num_heads=num_heads,
+                num_layers=4
+            )
+
+        if comparison == 'pairwise_l2':
+            self.comparison_model = cmp.PairwiseL2(
+                scale=sigma
+            )
+
+        self.training = training
+
+        if self.training == 'generative':
+            # each encoder has its symmetrical decoder
+            decoder_type = enc.encoder_decoder_map[type(self.obj_encoder)]
+            self.obj_decoder = decoder_type(
+                input_dim=self.num_channels,
+                hidden_dim=hidden_dim // 16,
+                num_slots=num_slots
+            )
+
+    def compare_imgs(self, x, y):
+        # L2 distance for now
+        img_scale = 1.
+        return ((x - y) / img_scale**2).pow(2).sum() / len(x)
+
+    def contrastive_energy(self, x, x_next, slot_mem=None):
+        # x, next_x :: [B. C, W, H]
+        # contrasting is done by mixing up the batch
+        random_inds = torch.randint(len(x), (len(x),))
+        x_contrast = x[random_inds]
+
+        slots = self.obj_encoder(x)
+        slots_next = self.obj_encoder(x_next)
+        slots_contrast = self.obj_encoder(x_contrast)
+
+        slots_next_pred = self.transition_model(slots, mem=slot_mem)
+
+        positive = self.comparison_model(slots_next, slots_next_pred)
+        negative = self.comparison_model(slots_contrast, slots) # TODO see for contrast here
+
+        energy = positive - self.g_func(negative)
+        energy = energy.sum() / len(x)
+
+        return energy, positive, negative
+
+    def generative_energy(self, x, x_next, slot_mem=None):
+        slots = self.obj_encoder(x)
+        slots_next_pred = self.transition_model(slots, mem=slot_mem)
+        x_next_decoded = self.obj_decoder(slots_next_pred)
+
+        return self.compare_imgs(x_next, x_next_decoded)
+
+
+    def compute_energy(self, x, x_next, slot_mem=None):
+
+        if self.training == 'contrastive':
+            energy, _, _ = self.contrastive_energy(x, x_next, slot_mem)
+        elif self.training == 'generative':
+            energy = self.generative_energy(x, x_next, slot_mem)
+
+        return energy
+
+if __name__ == "__main__":
+    # test models
+    batch_size = 32
+    num_slots = 4
+    slot_dim = 2
+    hidden_dim = 128
+    num_heads = 2
+    width, height = 30, 30
+    num_channels = 6
+    hinge = torch.tensor(1.)
+    g_func = lambda x: 1. * torch.max(x, hinge)
+    x = torch.rand(batch_size, num_channels, width, height)
+    x_next = torch.rand(batch_size, num_channels, width, height)
+
+    model = Module(
+        num_slots=num_slots,
+        slot_dim=slot_dim,
+        hidden_dim=hidden_dim,
+        input_dims=(num_channels, width, height),
+        num_heads=num_heads,
+        g_func=g_func,
+        relational=False
     )
-    return torch.sparse.sum(st, dim=1).values()
+    E = model.compute_energy(x, x_next)
+    print(f"Energy, non-relational, non-recurrent: {E.item()}")
 
-def scatter_mean(x, batch):
-    nbatches = batch[-1] + 1
-    nelems = len(batch)
-    fx = x.shape[-1]
-    i = torch.stack([batch, torch.arange(nelems)])
-    
-    st = torch.sparse.FloatTensor(
-        i,
-        x, 
-        torch.Size([nbatches, nelems] + list(x.shape[1:])),
+    model = Module(
+        num_slots=num_slots,
+        slot_dim=slot_dim,
+        hidden_dim=hidden_dim,
+        input_dims=(num_channels, width, height),
+        num_heads=num_heads,
+        g_func=g_func,
+        relational=True,
+        relation_type='gnn'
     )
-    ost = torch.sparse.FloatTensor(
-        i,
-        torch.ones(nelems), 
-        torch.Size([nbatches, nelems]),
+    E = model.compute_energy(x, x_next)
+    print(f"Energy, gnn relation type, non-recurrent: {E.item()}")
+
+    model = Module(
+        num_slots=num_slots,
+        slot_dim=slot_dim,
+        hidden_dim=hidden_dim,
+        input_dims=(num_channels, width, height),
+        num_heads=num_heads,
+        g_func=g_func,
+        relational=True,
+        relation_type='transformer'
     )
-    xsum = torch.sparse.sum(st, dim=1).values()
-    print(xsum.shape)
-    nx = torch.sparse.sum(ost, dim=1).values().view([-1, 1])
-    print(nx.shape)
-    return xsum / nx
+    E = model.compute_energy(x, x_next)
+    print(f"Energy, transformer relation type, non-recurrent: {E.item()}")
 
-def scatter_softmax(x, batch):
-    """
-    Computes the softmax-reduction of elements of x as given by the batch index
-    tensor.
-    """
-    nbatches = batch[-1] + 1
-    nelems = len(batch)
-    fx = x.shape[-1]
-    i = torch.stack([batch, torch.arange(nelems)])
-    
-    # TODO: patch for numerical stability
-    exp = x.exp()
-    st = torch.sparse.FloatTensor(
-        i,
-        exp,
-        torch.Size([nbatches, nelems] + list(x.shape[1:])),
-    )
-    expsum = torch.sparse.sum(st, dim=1).values()[batch]
-    return exp / expsum
 
-### Encoders
-
-class PureCNNEncoder(nn.Module):
-    """
-    Simplest encoder with CNN + chunking on the feature dim.
-    """
-    def __init__(self, in_ch, inter_ch, out_ch, in_size, K, stop=0):
-        super().__init__()
-
-        self.K = K
-
-        self.conv = utm.MaxpoolEncoder(
-            in_ch, inter_ch, out_ch * K, in_size, stop=stop)
-    
-    def forward(self, x):
-        z = self.conv(x)
-        # format by slots
-        zs = torch.stack(z.chunk(self.K, -1), 1)
-        return zs
-
-class PureCNNEncoder_nopool(nn.Module):
-    """
-    Simplest encoder with CNN + chunking on the feature dim.
-    """
-    def __init__(self, in_ch, inter_ch, out_ch, in_size, K, n_layers=5):
-        super().__init__()
-
-        self.K = K
-        self.conv = utm.CNN_nopool(in_ch, inter_ch, K, n_layers)
-        self.phi = nn.Linear((in_size//2)**2, out_ch)
-    
-    def forward(self, x):
-        out = self.conv(x)
-        return self.phi(out)
-
-class SimpleEncoder(nn.Module):
-    """
-    Simple encoder. Adds an mlp to the output of the PureCNNEncoder.
-    """
-    def __init__(self, in_ch, inter_ch, out_ch, in_size, K, stop=0, 
-                 num_mlp_layers=3):
-        super().__init__()
-
-        self.K = K
-
-        self.conv = utm.MaxpoolEncoder(
-            in_ch, inter_ch, out_ch * K, in_size, stop=stop)
-        
-        self.mlp = utm.MLP([out_ch] * num_mlp_layers)
-        # normalization layer ?
-
-    def forward(self, x):
-        z = self.conv(x)
-        # format by slots
-        zs = torch.stack(z.chunk(self.K, -1), 1)
-        zs = self.mlp(zs)
-        return zs
-
-class RecurrentSlotAttention(nn.Module):
-    """
-    Insipred by Kipf's last paper. After a convolutional net, a feature map
-    is produced. The model holds a set of slots as internal state. Each of the
-    slots attends to each of the pixels of the feature map to produce an
-    attention weight (with the classical dot-product-attention), that is
-    softmax-normalized over all slots. The new slot is the weighted mean of all
-    slots in the feature map, weighted by their attention weights. This slot 
-    will be used in the next iteration.
-
-    The softmaxing over slots ensures competition between slots and provides
-    an inductive bias towards specialization over slots.
-
-    Arguments:
-        - in_ch: number of input channels, usually 3;
-        - inter_ch: number of internal channels for the convnet;
-        - out_ch: number of output channels/features for the slots;
-        - in_size: size of the height/width of the inpu image;
-        - K: number of slots.
-    """
-    def __init__(self, in_ch, inter_ch, out_ch, in_size, K, n_layers=5):
-        super().__init__()
-
-        self.K = K
-        self.out_ch = out_ch
-        self.in_size = in_size
-
-        self.conv = utm.CNN_nopool(in_ch, inter_ch, out_ch, n_layers)
-        self.q_proj = nn.Linear(out_ch, out_ch)
-        self.k_proj = nn.Linear((out_ch + 2), out_ch)
-        self.v_proj = nn.Linear((out_ch + 2), out_ch)
-        
-        self.register_buffer("zs", None)
-
-        lin = torch.linspace(-1, 1, in_size // 2)
-        grid = torch.stack(torch.meshgrid(lin, lin), -1)
-        self.register_buffer("grid", grid)
-
-    def z_init(self, B):
-        """
-        Initialize slots. They are drawn from a multidimensional, standard,
-        centered, normal distribution. B is the batch size.
-        """
-        means = torch.zeros(B, self.K, self.out_ch)
-        stds = torch.ones(B, self.K, self.out_ch)
-        zs = torch.normal(means, stds)
-
-        # self.zs = zs
-        # self.register_buffer("zs", zs)
-        return zs
-
-    def forward(self, x, zs):
-        B = x.shape[0]
-        S = self.in_size // 2
-        F = self.out_ch
-
-        # no previous memory
-        # if zs is None:
-        #     zs = self.z_init(B)
-
-        fmap = self.conv(x).transpose(1, 2)
-        Bgrid = self.grid.expand(B, S, S, 2).reshape(B, S**2, 2)
-        fmap = torch.cat([fmap, Bgrid], -1)
-        # fmap = torch.reshape(B, S**2, F+2)
-
-        scaling = float(F) ** -0.5
-        q = self.q_proj(zs) * scaling
-        k = self.k_proj(fmap)
-        v = self.v_proj(fmap)
-
-        aw = q @ k.transpose(1, 2)
-        aw = torch.softmax(aw, dim=1)
-
-        zs = aw @ v / aw.sum(-1, keepdim=True)
-
-        # self.register_buffer("zs", zs)
-        # self.zs = zs
-
-        return zs
-
-# img = torch.rand(8, 3, 30, 30)
-# m = RecurrentSlotAttention(3, 32, 64, 30, 2)
-
-### Slot-Memory
-
-class SelfAttentionLayer(nn.Module):
-    """
-    Multi-head Self-Attention layer.
-
-    Inputs:
-        - x: the input data for a minibatch, concatenated in the 0-th dim.
-        - batch: an index tensor giving the indices of the elements of x in
-            minibatch.
-    """
-    def __init__(self, Fin, Fqk, Fv, nheads):
-        super().__init__()
-        self.Fin = Fin # in features
-        self.Fqk = Fqk # features for dot product
-        self.Fv = Fv # features for values
-        self.nheads = nheads
-
-        assert Fqk // nheads == Fqk / nheads, "self-attention features must "\
-            " be divisible by number of heads"
-        assert Fv // nheads == Fv / nheads, "value features must "\
-            " be divisible by number of heads"
-
-        # for now values have the same dim as keys and queries
-        self.Ftot = (2*Fqk + Fv)
-
-        self.proj = nn.Linear(Fin, self.Ftot, bias=False)
-
-    def forward(self, x):
-        B, N, _ = x.shape
-        H = self.nheads
-        Fh = self.Fqk // H
-        Fhv = self.Fv // H
-
-        scaling = float(Fh) ** -0.5
-        q, k, v = self.proj(x).split([self.Fqk, self.Fqk, self.Fv], dim=-1)
-
-        q = q * scaling
-        q = q.reshape(B, N, H, Fh).transpose(1, 2)
-        k = k.reshape(B, N, H, Fh).transpose(1, 2)
-        v = v.reshape(B, N, H, Fhv).transpose(1, 2)
-
-        aw = q @ (k.transpose(2, 3))
-        aw = torch.softmax(aw, dim=-1)
-
-        out = (aw @ v)
-        out = out.transpose(1, 2).reshape(B, N, self.Fv)
-
-        return out
-
-class AttentionLayerSparse(nn.Module):
-    """
-    Sparse version of the above, for accepting batches with different
-    numbers of objects.
-    """
-    def __init__(self, Fin, Fqk):
-        super().__init__()
-        self.Fin = Fin # in features
-        self.Fqk = Fqk # features for dot product
-
-        # for now values have the same dim as keys and queries
-        self.Ftot = 2 * Fqk
-
-        self.proj = nn.Linear(Fin, self.Ftot, bias=False)
-
-    def forward(self, x, batch, ei):
-        # remove dependence on batch ?
-
-        src, dest = ei
-
-        B = batch[-1] + 1
-
-        scaling = float(self.Fqk) ** -0.5
-        q, k = self.proj(x).chunk(2, -1)
-
-        q = q * scaling
-
-        qs, ks = q[src], k[dest]
-        # dot product
-        aw = qs.view(-1, 1, self.Fqk) @ ks.view(-1, self.Fqk, 1)
-        aw = aw.squeeze()
-        # softmax reduction
-        aw = scatter_softmax(aw, src)
-
-        # out = aw.view([-1, H, 1]) * vs
-        # out = scatter_sum(out, src)
-        # out = out.reshape([-1, self.Fv])
-
-        return out
-
-class TransformerBlock(nn.Module):
-    """
-    Implements a full Transformer block, with skip connexions, layernorm
-    and an mlp.
-
-    Arguments:
-        - d: dimension of a head
-        - projdim: dimension for projection inside mhsa
-        - h: number of heads
-    """
-    def __init__(self, d, projdim, h):
-        super().__init__()
-
-        self.d = d
-        self.h = h
-        self.projdim = projdim
-
-        if self.projdim != self.d:
-            # need an additional linear layer for the skip-connexion
-            # to ajust the dimensionality of outputs
-            self.proj = nn.Linear(projdim, d)
-
-        self.norm1 = nn.LayerNorm([d])
-        self.norm2 = nn.LayerNorm([d])
-
-        self.mhsa = SelfAttentionLayer(d, projdim, projdim, h)
-        # TODO: check papers for hparams
-        self.mlp = utm.MLP([d, projdim, d])
-
-    def forward(self, x):
-
-        y = self.mhsa(x)
-        if self.projdim != self.d:
-            # ajust dimension of output
-            y = self.proj(y)
-        y = self.norm1(x + y)
-
-        z = self.mlp(y)
-        z = self.norm2(y + z)
-
-        return z
-
-### Slot-Memory architectures
-
-class SlotMem(nn.Module):
-    """
-    A GNN where the edge model + edge aggreg is a self-attention layer.
-    There are K hidden states and cells, each corresponding to a particular
-    memory slot. The LSTM parameters are shared between all slots.
-
-    Dense implem (should we call this a GNN ?)
-
-    We have two choices for what vectors we use for the self-attention update:
-    hidden vectors of cells. We'll use cells here, but that may not be the best
-
-    choice.
-
-    The model only does one forward pass on the sequence.
-
-    Arguments:
-        - B: batch size, must be specified in advance;
-        - K: number of memory slots;
-        - Fin: number of features of the input;
-        - Fmem: number of features of each memory slot;
-        - H: number of dims of the projections in Transformer;
-        - nheads: number of heads in the self-attention mechanism;
-        - gating: can one of "slot" or "feature".
-            "slot" means the gating mechanism happens at the level of the whole
-            slot; 
-            "feature" means the gating mechanism happens at the level of
-            individual features.
-    """
-    def __init__(self, K, Fmem, H, nheads, gating="feature"):
-        super().__init__()
-
-        self.K = K
-        self.Fmem = Fmem
-        self.H = H
-        self.nheads = nheads
-        self.gating = gating
-
-        # maybe replace with something else
-        self.self_attention = TransformerBlock(
-            Fmem,
-            H,
-            nheads,
-        )
-
-        # define the gating net
-        if gating == "feature":
-            self.proj = nn.Linear(2 * Fmem, 2 * Fmem)
-        elif gating == "slot":
-            self.proj = nn.Linear(2 * Fmem, 2)
-        else:
-            raise ValueError("the 'gating' argument must be one of:\n"
-                             "\t- 'slot'\n\t- 'feature'")
-
-    def _mem_init(self, bsize):
-        """
-        Some form of initialization where the vectors are unique.
-
-        The batch size must be provided.
-        """
-        memory0 = torch.cat([
-            torch.eye(self.K).expand([bsize, self.K, self.K]),
-            torch.zeros([bsize, self.K, self.Fmem - self.K])
-        ], -1)
-        return memory0
-
-    def forward(self, x, memory):
-        # x can also be None when no output is provided
-
-        # add input vectors to perform self-attention
-        if x is not None:
-            mem_cat = torch.cat([memory, x], 1)
-        else:
-            mem_cat = memory
-        # candidate input
-        mem_update = self.self_attention(mem_cat)[:, :self.K]
-
-        # compute forget and input gates
-        f, i = self.proj(torch.cat([memory, mem_update], -1)).chunk(2, -1)
-
-        # update memory
-        # this mechanism may be refined
-        memory = memory * torch.sigmoid(f) + mem_update * torch.sigmoid(i)
-
-        # for now the output is the memory
-        output = memory
-
-        return output, memory
-
-class SlotMemIndependent(nn.Module):
-    """
-    Slot-memory, LSTM structure, no interaction between slots.
-
-    The dimensions of input and outputs can differ from the dimension
-    of memory.
-    """
-    def __init__(self, K, Fmem, Fin, Fout):
-        super().__init__()
-
-        self.K = K
-        self.Fmem = Fmem
-        self.Fin = Fin
-
-        self.proj = nn.Linear(Fin + Fmem, 4 * Fmem)
-        self.out_proj = nn.Linear(Fmem, Fout)
-
-    def _mem_init(self, bsize):
-        """
-        Initializes hidden state and cell.
-        """
-        h0 = torch.cat([
-            torch.eye(self.K).expand([bsize, self.K, self.K]),
-            torch.zeros([bsize, self.K, self.Fmem - self.K])
-        ], -1)
-        c0 = torch.cat([
-            torch.eye(self.K).expand([bsize, self.K, self.K]),
-            torch.zeros([bsize, self.K, self.Fmem - self.K])
-        ], -1)
-        
-        return torch.cat([h0, c0], -1)
-
-    def forward(self, x, mem):
-        h, c = mem.chunk(2, -1)
-        
-        f, i, c_tilde, o = self.proj(torch.cat([x, h], -1)).chunk(4, -1)
-        c_tilde = torch.tanh(c_tilde)
-        c = torch.sigmoid(f) * c + torch.sigmoid(i) * c_tilde
-        h = torch.sigmoid(o) * c
-        
-        out = self.out_proj(h)
-        mem = torch.cat([h, c], -1)
-        
-        return out, mem
-
-### Slot-distance functions
-
-class L2Dist(nn.Module):
-    """
-    Simple slot-wise L2 distance.
-    """
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, z, m):
-        return ((z - m)**2).sum(-1)**.5
-
-class NegativeCosSim(nn.Module):
-    """
-    Slot-wise negative cosine similarity.
-    """
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, z, m):
-        # z, m :: [B, N, F]
-        # TODO check this
-        B, N, F = z.shape
-        normz = (z**2).sum(-1).unsqueeze(-1)
-        normm = (m**2).sum(-1).unsqueeze(-1)
-
-        dot = z.view([B, N, 1, F]) @ m.view([B, N, F, 1])
-        return dot.squeeze(-1) / (normz * normm)
-
-class MatchDistance(nn.Module):
-    """
-    This module defines a matching procedure between the two given slot-based
-    elements: First a compatibility score is computed between all vectors and
-    constrained to be positive and sum to 1 on all destination vectors.
-    These compatibility scores are then used as the parameters of a Bernoulli
-    over each pair of vectors, which is then sampled to match vectors. The
-    constraint implements a form of competition between vectors of the second
-    input.
-    The distance computation is then made according to those created matchings.
-    """
-    def __init__(self, Fin, Fqk, hard=True, tau=0.5):
-        super().__init__()
-
-        # note: no heads, maybe add ?
-        # sparse implem for dealing with sparse edges ?
-        self.Fin = Fin
-        self.Fqk = Fqk
-        self.Ftot = 2 * Fqk
-
-        self.hard = hard
-        # temperature for the gumbel-softmax
-        self.tau = tau
-
-        self.attention = AttentionLayerSparse(Fin=Fin, Fqk=Fqk)
-
-    def forward(self, z, m):
-        B, Nz, F = z.shape
-        _, Nm, _ = m.shape
-        zm = torch.cat([z, m], 1)
-
-        batchz = torch.arange(B).expand(Nz, B).transpose(0, 1).flatten()
-        batchm = torch.arange(B).expand(Nm, B).transpose(0, 1).flatten()
-        batch = torch.cat([batchz, batchm], 0)
-
-        ei = get_crossgraph_ei(B, Nz, Nm)
-        
-        # compute attention and sample edges
-        aw = self.attention(zm, batch, ei)
-        if self.hard:
-            two_classes = torch.stack([aw, 1 - aw], -1)
-            weight = F.gumbel_softmax(
-                two_classes,
-                hard=True,
-                tau=self.tau)[:, 0]
-        else:
-            weight = aw
-
-        src, dest = ei
-        # distance weighed by the discrete edges/compatibility scores
-        d = (z[src] - m[dest])**2 * weight
-
-        return d
-
-### Complete models
-
-class BaseCompleteModel(nn.Module):
-    """
-    Base class for a complete model, with an encoder, a slot-memory mechanism
-    and a distance mechanism. Subclasses of this may define the models in the
-    __init__ function directly.
-    """    
-    def __init__(self, C_phi, M_psi, Delta_xi, model_diff=False, 
-                 recurrent_encoder=False):
-        super().__init__()
-
-        self.model_diff = model_diff
-
-        self.C_phi = C_phi
-        self.M_psi = M_psi
-        self.Delta_xi = Delta_xi
-
-        self.recurrent_encoder = recurrent_encoder
-
-    def next(self, x):
-        return self.M_psi(self.C_phi(x))
-
-    def mem_init(self, bsize):
-        if not self.recurrent_encoder:
-            return self.M_psi._mem_init(bsize)
-        else:
-            mem = self.M_psi._mem_init(bsize)
-            z1 = self.C_phi.z_init(bsize)
-            z2 = self.C_phi.z_init(bsize)
-            return mem, z1, z2
-
-    def forward(self, x1, x2, mem=None, n_recurrent_passes=1):
-        """
-        Computes the energy between x1 and x2. Usually, x1 is some state and
-        x2 is some state in the future. 
-
-        n_recurrent_passes denotes the number of internal recurrent steps done
-        by the model before comparing x1 and x2. No input is given to the
-        model.
-
-        TODO: some implems of C_phi are recurrent. For now, we let the
-        formulation of the computation as is and cache the recurrence inside
-        the state of the C_phi model. If we continue using it, we may want to
-        make sure the structure of the computation makes this explicit.
-        """
-        if mem is None:
-            mem = self.mem_init(x1.shape[0]) # TODO adapt mem for recurrent encoders
-
-        if not self.recurrent_encoder:
-            z1 = self.C_phi(x1)
-            z2 = self.C_phi(x2)
-        else:
-            mem, z1, z2 = mem
-            z1 = self.C_phi(x1, z1)
-            z2 = self.C_phi(x2, z2)
-
-        # z1/z2 :: [B, K, F]
-
-        out, next_mem = self.M_psi(z1, mem)
-
-        for _ in range(n_recurrent_passes-1):
-            # do additional recurrent passes with no input
-            out, next_mem = self.M_psi(None, next_mem)
-
-        # compute distance/energy d
-        if not self.model_diff:
-            d = self.Delta_xi(z2, out)
-        else:
-            # alternative: model the difference
-            d = self.Delta_xi(z2, z1 + out)
-
-        if self.recurrent_encoder:
-            next_mem = (next_mem, z1, z2)
-
-        return d, next_mem
-
-    def forward_seq(self, xs, mem=None):
-        """
-        Computes the forward pass on the given sequence xs.
-        This is done by comparing the neighbouring elements one by one.
-
-        The sequence xs is expected as a tensor of size sequence_length, bsize,
-        etc ...
-
-        returns the sequence of distances, the sequences of encoded hidden
-        representations and the sequence of predicted hidden representations.
-        """
-        d_list = []
-        z_list = []
-        z_hat_list = []
-
-        if mem is None:
-            mem = self.mem_init(xs.shape[1])
-
-        for i in range(len(xs) - 1):
-            z1 = self.C_phi(xs[i])
-            z2 = self.C_phi(xs[i+1])
-
-            out, mem = self.M_psi(z1, mem)
-
-            if not self.model_diff:
-                z2_hat = out
-            else:
-                z2_hat = z1 + out
-    
-            d = self.Delta_xi(z2, z2_hat)
-
-            d_list.append(d)
-            z_list.append(z2)
-            z_hat_list.append(z2_hat)
-
-        return d_list, z_list, z_hat_list
-
-    # def forward_rollout(self, x, xs):
-    #     """
-    #     Computes the energy between x and a list of inputs xs.
-    #     The energy between x and xs[i] is computed by doing i recurrent
-    #     passes without input after encoding x, and comparing to the encoding
-    #     of x[i].
-    #     Returns a list of energies.
-    #     """
-    #     # TODO: modify for tensor inputs
-    #     raise NotImplementedError
-
-    #     # TODO: modify this to comply ith new slotmem interface
-    #     if not isinstance(xs, list):
-    #         xs = [xs]
-
-    #     z = self.C_phi(x)
-    #     # TODO paralellize the following
-    #     zs = [self.C_phi(y) for y in xs]
-
-    #     L = len(xs)
-    #     mlist = [self.M_psi(z)]
-
-    #     for _ in range(L-1):
-    #         mlist.append(self.M_psi())
-
-    #     if not self.model_diff:
-    #         d = [self.Delta_xi(zz, m) for zz, m in zip(zs, mlist)]
-    #     else:
-    #         # model the difference
-    #         # first compute the cumulative sum of elements of mlist
-    #         mtensor = torch.stack(mlist, 0)
-    #         cumsum_mtensor = mtensor.cumsum()
-    #         # then model the transitions
-    #         d = [self.Delta_xi(zz, z + m) for zz, m in zip(zs, cumsum_mtensor)]
-
-    #     return d
-
-class CompleteModel_Debug(BaseCompleteModel):
-    """
-    Simpler, debugging version.
-    """
-    def __init__(self, K, Fmem, hidden_dim, input_dims, nheads,
-                 model_diff=True):
-        self.H, self.W, self.C = input_dims
-        self.K = K
-        
-        C_phi = PureCNNEncoder_nopool(3, 32, Fmem, self.H, K)
-        M_psi = SlotMemIndependent(K, hidden_dim, Fmem, Fmem)
-        Delta_xi = L2Dist()
-
-        super().__init__(C_phi, M_psi, Delta_xi, model_diff=model_diff)
-
-class CompleteModel_Debug_SlotAttentionEncoder(BaseCompleteModel):
-    """
-    Same as above, but with Recurrent Slot Attention encoder model.
-    """
-    def __init__(self, K, Fmem, hidden_dim, input_dims, nheads,
-                 model_diff=True):
-        self.H, self.W, self.C = input_dims
-        self.K = K
-        
-        C_phi = RecurrentSlotAttention(3, 32, Fmem, self.H, K)
-        M_psi = SlotMemIndependent(K, hidden_dim, Fmem, Fmem)
-        Delta_xi = L2Dist()
-
-        super().__init__(C_phi, M_psi, Delta_xi, model_diff=model_diff,
-                         recurrent_encoder=True)
-
-class CompleteModel_SlotDistance(BaseCompleteModel):
-    """
-    Slot-wise distance fn.
-    """
-    def __init__(self, K, Fmem, hidden_dim, input_dims, nheads, 
-                 model_diff=False):
-
-        self.H, self.W, self.C = input_dims
-        self.K = K
-        
-        C_phi = PureCNNEncoder_nopool(3, 32, Fmem, self.H, K)
-        M_psi = SlotMem(K, Fmem, hidden_dim, nheads)
-        Delta_xi = L2Dist()
-
-        super().__init__(C_phi, M_psi, Delta_xi, model_diff=model_diff)
-
-class CompleteModel_SoftMatchingDistance(BaseCompleteModel):
-    """
-    Simple CNN encoder;
-    Parallel-LSTM with dot-product-attention communication between slots;
-    Soft-slot-matching distance function.
-    """
-    def __init__(self, K, Fmem, hidden_dim, input_dims, nheads):
-
-        self.H, self.W, self.C = input_dims
-        self.K = K
-
-        C_phi = SimpleEncoder(3, 32, Fmem, self.H, K)
-        M_psi = SlotMem(K, Fmem, hidden_dim, nheads)
-        Delta_xi = MatchDistance(Fmem, Fmem, hard=False)
-
-        super().__init__(C_phi, M_psi, Delta_xi)
-
-class CompleteModel_HardMatchingDistance(BaseCompleteModel):
-    """
-    Simple CNN encoder;
-    Parallel-LSTM with dot-product-attention communication between slots;
-    Hard-slot-matching distance function.
-    """
-    def __init__(self, K, Fmem, hidden_dim, input_dims, nheads):
-
-        self.H, self.W, self.C = input_dims
-        self.K = K
-
-        C_phi = SimpleEncoder(3, 32, Fmem, self.H, K)
-        M_psi = SlotMem(K, Fmem, hidden_dim, nheads)
-        Delta_xi = MatchDistance(Fmem, Fmem, hard=True)
-
-        super().__init__(C_phi, M_psi, Delta_xi)
-
-### For processing sequences
-
-def recurrent_apply(recurrent_model, seq, mem0):
-    # S :: [s, b] + input_dims
-    # mem0 is initial memory
-
-    out_list = []
-    mem = mem0
-
-    for i in range(len(seq) - 1):
-        s1 = seq[i]
-        s2 = seq[i+1]
-
-        d, mem = recurrent_model(s1, s2, mem)
-        out_list += [d]
-
-    return torch.cat(out_list, 0)
-
-def recurrent_apply_contrastive(recurrent_model, seq, mem0=None):
-    """
-    Same as recurrent_apply, applies a recurrent model on a sequence of inputs,
-    but also computes the time-contrastive term by sampling arbitrary 
-    next-states.
-
-    One-hop prediction.
-
-    mem0 is first memory.
-    """
-    if mem0 is None:
-        B = seq.shape[1]
-        mem0 = recurrent_model.mem_init(B)
-    N = len(seq)
-    # compute randomly shuffled sequence
-    rand = (torch.randint(1, N-1, (N-1,)) + torch.arange(N-1)).fmod(N-1)
-
-    normal_range = list(range(N-1))
-    random_range = rand.tolist()
-
-    out_list = []
-    out_list_contrastive = []
-
-    mem = mem0
-
-    for i, j in zip(normal_range, random_range):
-        s1 = seq[i]
-        s2 = seq[i+1]
-        sc = seq[j+1]
-
-        d, _ = recurrent_model(s1, s2, mem)
-        d_contrastive, mem = recurrent_model(s1, sc, mem)
-
-        out_list += [d]
-        out_list_contrastive += [d_contrastive]
-
-    return torch.stack(out_list, 0), torch.stack(out_list_contrastive, 0)
-
-def recurrent_apply_contrastive_Lsteps(recurrent_model, seq, L):
-    """
-    Same as before, but the predictions are rolled-out on L steps and the loss
-    is computed between all the predicted steps.
-
-    TODO: Maybe only rollout from a random subset of the start states ?
-    TODO: How to compute contrastive samples ? For now, completely random
-          sequence.
-    """
-    raise NotImplementedError
-    # TODO: adapt this to new SlotMem interface
-
-    N = len(seq)
-    assert(N > L, (f"Length of the rollout ({L}) should be strictly smaller"
-                   f" than length of the sequence ({N})"))
-    # set of random sequences
-    # check it is correct
-    rand = (torch.randint(1, N-L, (N-L, L)) + torch.arange(N-L)).fmod(N-L)
-    random_range_list = rand.tolist()
-    normal_range = range(L)
-
-    for t0, random_range in range(random_range_list):
-        # start state loop
-        t = t0
-        s = seq[t]
-
-        for i, j in zip(normal_range, random_range):
-            # sequence length loop
-            strue = seq[t+i]
-            scontrastive = seq[t+j]
-            pred = recurrent_model(s)
-            # TODO: finish this
-
-### Tests
-
-# model = SlotMem(7, 4, 10, 2)
-# x = torch.rand(7, 4, 10)

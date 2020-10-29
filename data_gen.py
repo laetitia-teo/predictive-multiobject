@@ -12,7 +12,7 @@ from envs.three_body_physics.physics_sim import generate_3_body_problem_dataset
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--fname', type=str,
-                    default='data',
+                    default='data/data',
                     help='File name / path.')
 parser.add_argument('--num-episodes', type=int, default=1000,
                     help='Number of episodes to generate.')
@@ -23,7 +23,7 @@ parser.add_argument('--eval', action='store_true', default=False,
 parser.add_argument('--task', type=str,
                     default='two-sphere-simple',
                     help='What dataset to generate.')
-parser.add_argument('--seq-len', type=int, default=20,
+parser.add_argument('--seq-len', type=int, default=40,
                     help='Length of the generated sequences.')
 parser.add_argument('--occluder', type=bool, default=False,
                     help='whether or not to add an occluder at the center of the'
@@ -37,10 +37,10 @@ if args.task == "two-sphere-simple":
     generate_two_sphere_dataset(
         dest=args.fname + '.hdf5',
         train_set_size=args.num_episodes,
-        seq_len=20,
+        seq_len=args.seq_len,
         mode="simple",
         img_size=[30, 30],
-        dt=0.3,
+        dt=0.05,
         seed=args.seed,
         occluder=args.occluder
     )
@@ -48,10 +48,10 @@ elif args.task == "two-sphere-indep":
     generate_two_sphere_dataset(
         dest=args.fname + '.hdf5',
         train_set_size=args.num_episodes,
-        seq_len=20,
+        seq_len=args.seq_len,
         mode="indep",
         img_size=[30, 30],
-        dt=0.3,
+        dt=0.05,
         seed=args.seed,
         occluder=args.occluder
     )
@@ -59,10 +59,10 @@ elif args.task == "two-sphere-indep-partial":
     generate_two_sphere_dataset(
         dest=args.fname + '.hdf5',
         train_set_size=args.num_episodes,
-        seq_len=20,
+        seq_len=args.seq_len,
         mode="indep_partial",
         img_size=[30, 30],
-        dt=0.3,
+        dt=0.05,
         seed=args.seed,
         occluder=args.occluder
     )
