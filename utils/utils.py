@@ -5,6 +5,8 @@ import torch
 import torch.nn as nn
 import numpy as np
 
+import matplotlib.pyplot as plt
+
 def get_act_fn(act_fn):
     if act_fn == 'relu':
         return nn.ReLU()
@@ -50,7 +52,7 @@ def save_dict_h5py(array_dict, fname):
 
     with h5py.File(fname, 'w') as hf:
         for key in array_dict.keys():
-            hf.create_dataset(key, data=array_dict[key])
+            hf.create_dataset(key, data=np.array(array_dict[key]))
 
 
 # saving and loading hdf5 files
@@ -88,3 +90,31 @@ def load_list_dict_h5py(fname):
             for key in hf[grp].keys():
                 array_dict[i][key] = hf[grp][key][:]
     return array_dict
+
+# model utilities
+
+def get_grad(model):
+    # gets accumulated gradients in model parameters as a single vector
+    pl = []
+    for p in model.parameters():
+        pl.append(p.grad.reshape(-1))
+    return torch.cat(pl, 0)
+
+def save_model(model, savepath):
+    torch.save(model.state_dict(), savepath)
+
+def load_model(model, savepath):
+    model.load_state_dict(torch.load(savepath))
+
+def nparams(model):
+    return sum(p.numel() for p in model.parameters())
+
+# plotting utils
+
+def save_plot_dict(dictionnary, save_path):
+    for key in dictionnary.keys():
+        plt.plot(dictionnary[key], label=key)
+    plt.legend(loc="upper_right")
+
+    plt.savefig(save_path)
+    plt.close()

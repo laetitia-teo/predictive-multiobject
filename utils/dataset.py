@@ -202,6 +202,7 @@ class SequenceDataset(Dataset):
         self.data = load_hdf5(fname)
 
     def transform(self, img):
+        img = img.permute(0, 3, 1, 2)
         return (img.float() - 127.5) / 127.5
 
     def __len__(self):

@@ -15,10 +15,6 @@ Hyperparamer of the experiments:
     - speed of motion in dataset (?)
 """
 
-# TODO: define experiment id with results, logfiles and saved models
-# TODO: Maybe define a process that shows the training curve while the process
-# unfolds with subprocess and pygame ?
-
 import os
 import os.path as op
 import re

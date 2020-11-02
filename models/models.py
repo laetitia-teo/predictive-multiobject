@@ -154,6 +154,12 @@ class Module(nn.Module):
         positive = positive.sum() / len(x)
         negative = negative.sum() / len(x)
 
+        # print(f"energy {energy}")
+        # print(f"positive {positive}")
+        # print(f"negative {negative}")
+        # print(f"g_func negative {self.g_func(negative)}")
+        # print()
+
         return energy, positive.item(), negative.item(), next_mem
 
     def generative_energy(self, x, x_next, slot_mem=None):
@@ -192,6 +198,10 @@ class Module(nn.Module):
         energy_seq = sum(energies) / seq_len
         positive_seq = sum(positives) / seq_len
         negative_seq = sum(negatives) / seq_len
+
+        # print(energy_seq)
+        # print(positive_seq)
+        # print(negative_seq)
 
         return energy_seq, positive_seq, negative_seq
 
