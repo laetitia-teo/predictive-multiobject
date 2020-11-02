@@ -24,6 +24,15 @@ def load_hdf5(fname):
                 data[i][key] = f[grp][key][:]
     return data
 
+def load_hdf5(fname, device=torch.device('cpu')):
+    data = []
+
+    with h5py.File(fname, 'r') as f:
+        for grp in f.keys():
+            data.append(torch.tensor(f[grp][()], device=device))
+
+    return data
+
 def transpose_transform(np_array):
     a = np.transpose(np_array, (2, 0, 1))
     return a.astype(np.float32)
@@ -153,52 +162,11 @@ class ImageDs(Dataset):
     def __getitem__(self, i):
         return self.data[i]
 
-class ChunkImageDS(Dataset):
-    """
-    Chunk version of ImageDs: we define an additional L param that controls the
-    length of the output sequences.
-
-    Cuts the original squences of length self.T in chunks of length L. Returns
-    each chunk only once.
-    """
-    def __init__(self, path, L, gpu=False):
-        super().__init__(path, gpu)
-
-        self.L = L
-
-    def __len__(self):
-        return self.N_samples * (self.T // self.L)
-
-    def __getitem__(self, i):
-        n_chunks = self.T // self.L
-        k, r = i // n_chunks, i % n_chunks
-        seq = self.data[k]
-        return seq[r:r+self.L]
-
-class ChunkImageDS2(Dataset):
-    """
-    Chunk version of ImageDs: we define an additional L param that controls the
-    length of the output sequences.
-
-    Cuts the original squences of length self.T in chunks of length L. The 
-    chunks beginning indices span all sequence elements.
-
-    TODO: finish this
-    """
-    def __init__(self, path, L, gpu=False):
-        super().__init__(path, gpu)
-
-        self.L = L
-
-    def __len__(self):
-        raise NotImplementedError
-
-    def __getitem__(self, i):
-        raise NotImplementedError
-
 class TransitionDataset(Dataset):
     """
     Dataset class for simple transitions.
+
+    # TODO: deprecated
     """
     def __init__(self, fname):
         self.data = load_hdf5(fname)
@@ -207,7 +175,7 @@ class TransitionDataset(Dataset):
         self.idx2episode = list()
         step = 0
         for ep in range(len(self.data)):
-            num_steps = len(self.data[ep]['obs'])
+            num_steps = len(self.data[ep])
             idx_tuple = [(ep, idx) for idx in range(num_steps)]
             self.idx2episode.extend(idx_tuple)
             step += num_steps
@@ -220,8 +188,30 @@ class TransitionDataset(Dataset):
     def __getitem__(self, idx):
         ep, step = self.idx2episode[idx]
 
-        obs = transpose_transform(self.data[ep]['obs'][step])
-        next_obs = transpose_transform(self.data[ep]['next_obs'][step])
+        obs = transpose_transform(self.data[ep][step])
+        next_obs = transpose_transform(self.data[ep][step])
 
         return obs, next_obs
 
+class SequenceDataset(Dataset):
+    """
+    Dataset class for containing whole sequences.
+    """
+    def __init__(self, fname):
+        super().__init__()
+        self.data = load_hdf5(fname)
+
+    def transform(self, img):
+        return (img.float() - 127.5) / 127.5
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.transform(self.data[idx])
+
+if __name__ == '__main__':
+    fname = '../data/three_body_physics.hdf5'
+    # tds = TransitionDataset(fname)
+    sds = SequenceDataset(fname)
+    None

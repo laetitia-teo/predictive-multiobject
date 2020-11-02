@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-import util_models as utm
+import models.util_models as utm
 
 class TransitionSimple(nn.Module):
     """
@@ -21,9 +21,12 @@ class TransitionSimple(nn.Module):
             output_size=slot_dim
         )
 
+    def init_mem(self, batch_size):
+        return None
+
     def forward(self, x, *args, **kwargs):
         # x :: [B, K, F]
-        return self.node_model(x)
+        return self.node_model(x), None
 
 class TransitionSimple_GNN(nn.Module):
     """
@@ -50,6 +53,9 @@ class TransitionSimple_GNN(nn.Module):
             output_size=slot_dim
         )
 
+    def init_mem(self, batch_size):
+        return None
+
     def forward(self, x, *args, **kwargs):
         B, K, F = x.shape
         # create source and destination tensors
@@ -62,7 +68,7 @@ class TransitionSimple_GNN(nn.Module):
         edge_agg = edges.sum(2) # TODO check dim of reduction
 
         slots = self.node_model(torch.cat([x, edge_agg], -1))
-        return slots
+        return slots, None
 
 
 class TransitionSimple_Transformer(nn.Module):
@@ -99,11 +105,14 @@ class TransitionSimple_Transformer(nn.Module):
             num_layers=num_layers
         )
 
+    def init_mem(self, batch_size):
+        return None
+
     def forward(self, x, *args, **kwargs):
         # x :: [B, K, F], check this works with Transformer
         x = self.slot_encode(x)
         x = self.transformer(x)
-        return self.slot_decode(x)
+        return self.slot_decode(x), None
 
 
 # Models with internal memory
@@ -122,6 +131,10 @@ class TransitionRecurrent(nn.Module):
         self.num_slots = num_slots
         self.slot_dim = slot_dim
         self.hidden_dim = hidden_dim
+
+
+    def init_mem(self, batch_size):
+        return None
 
     def forward(self, x, mem):
         pass
@@ -142,6 +155,10 @@ class TransitionRecurrent_GNN(nn.Module):
         self.slot_dim = slot_dim
         self.hidden_dim = hidden_dim
 
+
+    def init_mem(self, batch_size):
+        return None
+
     def forward(self, x, mem):
         pass
 
@@ -159,6 +176,10 @@ class TransitionRecurrent_Transformer(nn.Module):
         self.num_slots = num_slots
         self.slot_dim = slot_dim
         self.hidden_dim = hidden_dim
+
+
+    def init_mem(self, batch_size):
+        return None
 
     def forward(self, x, mem):
         pass

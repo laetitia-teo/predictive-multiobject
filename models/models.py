@@ -7,10 +7,10 @@ import torch.nn as nn
 import numpy as np
 
 import utils.utils as utils
-import encoders as enc
-import transitions as trs
-import comparison as cmp
-import util_models as utm
+import models.encoders as enc
+import models.transitions as trs
+import models.comparison as cmp
+import models.util_models as utm
 
 class Module(nn.Module):
     """
@@ -125,6 +125,9 @@ class Module(nn.Module):
                 num_slots=num_slots
             )
 
+    def init_mem(self, batch_size):
+        return self.transition_model.init_mem(batch_size)
+
     def compare_imgs(self, x, y):
         # L2 distance for now
         img_scale = 1.
@@ -140,7 +143,7 @@ class Module(nn.Module):
         slots_next = self.obj_encoder(x_next)
         slots_contrast = self.obj_encoder(x_contrast)
 
-        slots_next_pred = self.transition_model(slots, mem=slot_mem)
+        slots_next_pred, next_mem = self.transition_model(slots, mem=slot_mem)
 
         positive = self.comparison_model(slots_next, slots_next_pred)
         negative = self.comparison_model(slots_contrast, slots) # TODO see for contrast here
@@ -148,27 +151,53 @@ class Module(nn.Module):
         energy = positive - self.g_func(negative)
         energy = energy.sum() / len(x)
 
-        return energy, positive, negative
+        positive = positive.sum() / len(x)
+        negative = negative.sum() / len(x)
+
+        return energy, positive.item(), negative.item(), next_mem
 
     def generative_energy(self, x, x_next, slot_mem=None):
         slots = self.obj_encoder(x)
-        slots_next_pred = self.transition_model(slots, mem=slot_mem)
+        slots_next_pred, next_mem = self.transition_model(slots, mem=slot_mem)
         x_next_decoded = self.obj_decoder(slots_next_pred)
 
-        return self.compare_imgs(x_next, x_next_decoded)
+        return self.compare_imgs(x_next, x_next_decoded), 0., 0., next_mem
 
 
     def compute_energy(self, x, x_next, slot_mem=None):
 
         if self.training == 'contrastive':
-            energy, _, _ = self.contrastive_energy(x, x_next, slot_mem)
+            energy, positive, negative, next_mem = self.contrastive_energy(x, x_next, slot_mem)
         elif self.training == 'generative':
-            energy = self.generative_energy(x, x_next, slot_mem)
+            energy, positive, negative, next_mem = self.generative_energy(x, x_next, slot_mem)
 
-        return energy
+        return energy, positive, negative, next_mem
+
+    def compute_energy_sequence(self, seq):
+        # seq :: [seq_len, batch_size, img_dims]
+        seq_len = len(seq)
+        batch_size = seq.shape[1]
+        energies, positives, negatives = [], [], []
+
+        mem = self.init_mem(batch_size)
+
+        for i in range(seq_len - 1):
+            x = seq[i]
+            x_next = seq[i+1]
+            energy, positive, negative, mem = self.compute_energy(x, x_next, slot_mem=mem)
+            energies.append(energy)
+            positives.append(positive)
+            negatives.append(negative)
+
+        energy_seq = sum(energies) / seq_len
+        positive_seq = sum(positives) / seq_len
+        negative_seq = sum(negatives) / seq_len
+
+        return energy_seq, positive_seq, negative_seq
 
 if __name__ == "__main__":
     # test models
+    seq_len = 5
     batch_size = 32
     num_slots = 4
     slot_dim = 2
@@ -181,6 +210,8 @@ if __name__ == "__main__":
     x = torch.rand(batch_size, num_channels, width, height)
     x_next = torch.rand(batch_size, num_channels, width, height)
 
+    seq = torch.rand(seq_len, batch_size, num_channels, width, height)
+
     model = Module(
         num_slots=num_slots,
         slot_dim=slot_dim,
@@ -190,8 +221,10 @@ if __name__ == "__main__":
         g_func=g_func,
         relational=False
     )
-    E = model.compute_energy(x, x_next)
-    print(f"Energy, non-relational, non-recurrent: {E.item()}")
+    E, P, N, _ = model.compute_energy(x, x_next)
+    print(f"Energy, non-relational, non-recurrent: {E.item()}",
+          f"\nPositive: {P}, Negative: {N}\n")
+    res = model.compute_energy_sequence(seq)
 
     model = Module(
         num_slots=num_slots,
@@ -203,8 +236,10 @@ if __name__ == "__main__":
         relational=True,
         relation_type='gnn'
     )
-    E = model.compute_energy(x, x_next)
-    print(f"Energy, gnn relation type, non-recurrent: {E.item()}")
+    E, _, _, _ = model.compute_energy(x, x_next)
+    print(f"Energy, gnn relation type, non-recurrent: {E.item()}"
+          f"\nPositive: {P}, Negative: {N}\n")
+    res = model.compute_energy_sequence(seq)
 
     model = Module(
         num_slots=num_slots,
@@ -216,7 +251,9 @@ if __name__ == "__main__":
         relational=True,
         relation_type='transformer'
     )
-    E = model.compute_energy(x, x_next)
-    print(f"Energy, transformer relation type, non-recurrent: {E.item()}")
+    E, _, _, _ = model.compute_energy(x, x_next)
+    print(f"Energy, transformer relation type, non-recurrent: {E.item()}"
+          f"\nPositive: {P}, Negative: {N}\n")
+    res = model.compute_energy_sequence(seq)
 
 
