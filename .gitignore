@@ -13,5 +13,9 @@ saves
 local
 configs
 
+# slurm runfiles
+
+run*.sh
+
 # pycharm
 .idea
