@@ -16,6 +16,8 @@ configs
 # slurm runfiles
 
 run*.sh
+runfiles
+execute_runfiles.sh
 
 # pycharm
 .idea
