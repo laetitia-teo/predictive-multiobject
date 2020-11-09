@@ -13,11 +13,13 @@ import os.path as op
 import datetime
 import csv
 import torch
+import argparse
 
 import matplotlib.pyplot as plt
 
 import utils.utils as utl
 
+from pathlib import Path
 from torch.utils.data import DataLoader
 
 from utils.dataset import SequenceDataset
@@ -25,7 +27,15 @@ from models.models import Module
 from utils.config_reader import ConfigReader
 # from utils.utils import save_dict_h5py
 
-num_args = len(sys.argv) - 1
+parser = argparse.ArgumentParser()
+add = parser.add_argument
+
+add('-c', '--config')
+add('-n', '--experiment-name')
+
+args = parser.parse_args()
+
+# num_args = len(sys.argv) - 1
 
 # if num_args != 1:
 #     print('run.py accepts a single argument specifying the config file.')
@@ -33,9 +43,9 @@ num_args = len(sys.argv) - 1
 
 # Read the config file
 # config = ConfigReader(sys.argv[1])
-config_id = 0
+config_id = args.config
 
-config = ConfigReader(f"configs/config{config_id}.txt")
+config = ConfigReader(f"configs/config{config_id}")
 
 RELATIONAL = config.val("RELATIONAL")
 RELATION_TYPE = config.val("RELATION_TYPE")
@@ -97,8 +107,9 @@ train_data = {
 }
 
 t = datetime.datetime.utcnow()
-experiment_name = (f"config{config_id}_{t.year}_{t.month}_{t.day}_{t.hour}_"
-                   f"{t.minute}_{t.microsecond}")
+# experiment_name = (f"config{config_id}_{t.year}_{t.month}_{t.day}_{t.hour}_"
+#                    f"{t.minute}_{t.microsecond}")
+experiment_name = args.experiment_name
 # make folder with experiment name
 
 train_data_save_path = op.join(
@@ -113,7 +124,13 @@ model_save_path = op.join(
     "model.pt"
 )
 
+# create save directory if it doesn't exist yet
+Path(op.join(SAVE_PATH, experiment_name)).mkdir(parents=True, exist_ok=True)
+
 try:
+
+    print(f'executing stuff, this is run {experiment_name}')
+
     for epoch in range(NUM_EPOCHS):
 
         print(f"Epoch {epoch}")
@@ -140,12 +157,12 @@ try:
     utl.save_model(model, model_save_path)
     utl.save_dict_h5py(train_data, train_data_save_path)
 
-except Exception:
-    # an error occured
+except (Exception, KeyboardInterrupt) as e:
+    # an error occured, or script was interrupted
     utl.save_plot_dict(
         train_data,
         op.join(SAVE_PATH, experiment_name, "train_plot.png")
     )
     utl.save_model(model, model_save_path)
     utl.save_dict_h5py(train_data, train_data_save_path)
-    raise Exception
+    raise e

@@ -114,7 +114,7 @@ def nparams(model):
 def save_plot_dict(dictionnary, save_path):
     for key in dictionnary.keys():
         plt.plot(dictionnary[key], label=key)
-    plt.legend(loc="upper_right")
+    plt.legend(loc="upper right")
 
     plt.savefig(save_path)
     plt.close()
