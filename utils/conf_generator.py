@@ -30,7 +30,7 @@ EXPE = [
     'two_sphere_indep_partial',
     'three_body_physics'
 ]
-OCCLUDER = [True]
+OCCLUDER = [False, True]
 
 # generate configs
 
