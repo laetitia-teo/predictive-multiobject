@@ -14,7 +14,14 @@ sys.path.append('..')
 
 # number of seeds
 num_seeds = 2
-SEEDS = [random.randint(0, 10000) for _ in range(num_seeds)]
+# SEEDS = [random.randint(0, 10000) for _ in range(num_seeds)]
+SEEDS = list(range(num_seeds))
+
+# fixed arguments
+
+NUM_EPOCHS = 100
+LEARNING_RATE = 1e-4
+BATCH_SIZE = 64
 
 # argument enums
 RELATIONAL = ['False']
@@ -47,7 +54,7 @@ if idx_list:
 
 idx = 0
 
-for seeds_value in SEEDS:
+for seed_value in SEEDS:
     for relational_value in RELATIONAL:
         for relation_type_value in RELATION_TYPE:
             for expe_value in EXPE:
@@ -79,11 +86,11 @@ for seeds_value in SEEDS:
                         '### Experiment params ###\n'
                         '\n'
                         f'EXPE = {expe_value}\n'
-                        'SEED = 0\n'
+                        f'SEED = {seed_value}\n'
                         '\n'
-                        'NUM_EPOCHS = 10\n'
-                        'BATCH_SIZE = 64\n'
-                        'LEARNING_RATE = 1e-4\n'
+                        f'NUM_EPOCHS = {NUM_EPOCHS}\n'
+                        f'BATCH_SIZE = {BATCH_SIZE}\n'
+                        f'LEARNING_RATE = {LEARNING_RATE}\n'
                         'WIDTH = 30 # maybe not useful\n'
                         'HEIGHT = 30 # maybe not useful\n'
                         '\n'
