@@ -23,6 +23,11 @@ class Module(nn.Module):
 
         super().__init__()
 
+        extractor = extractor.lower()
+        relation_type = relation_type.lower()
+        comparison = comparison.lower()
+        training = training.lower()
+
         self.num_slots = num_slots
         self.slot_dim = slot_dim
         self.hidden_dim = hidden_dim

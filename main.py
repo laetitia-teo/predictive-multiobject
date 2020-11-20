@@ -150,19 +150,19 @@ try:
             print(f"\tBatch {batch}, loss {energy.item()}, positive {positive},",
                   f"negative {negative}")
 
-    utl.save_plot_dict(
-        train_data,
-        op.join(SAVE_PATH, experiment_name, "train_plot.png")
-    )
+    # utl.save_plot_dict(
+    #     train_data,
+    #     op.join(SAVE_PATH, experiment_name, "train_plot.png")
+    # )
     utl.save_model(model, model_save_path)
     utl.save_dict_h5py(train_data, train_data_save_path)
 
 except (Exception, KeyboardInterrupt) as e:
     # an error occured, or script was interrupted
-    utl.save_plot_dict(
-        train_data,
-        op.join(SAVE_PATH, experiment_name, "train_plot.png")
-    )
+    # utl.save_plot_dict(
+    #     train_data,
+    #     op.join(SAVE_PATH, experiment_name, "train_plot.png")
+    # )
     utl.save_model(model, model_save_path)
     utl.save_dict_h5py(train_data, train_data_save_path)
     raise e

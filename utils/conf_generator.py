@@ -13,7 +13,7 @@ import os.path as op
 sys.path.append('..')
 
 # number of seeds
-num_seeds = 2
+num_seeds = 3
 # SEEDS = [random.randint(0, 10000) for _ in range(num_seeds)]
 SEEDS = list(range(num_seeds))
 
@@ -24,8 +24,8 @@ LEARNING_RATE = 1e-4
 BATCH_SIZE = 64
 
 # argument enums
-RELATIONAL = ['False']
-RELATION_TYPE = ['GNN']
+RELATIONAL = ['True', 'False']
+RELATION_TYPE = ['GNN', 'transformer']
 RECURRENT_TRANSITION = ['False']
 TRAINING = ['contrastive']
 G_FUNC = ['hinge']
