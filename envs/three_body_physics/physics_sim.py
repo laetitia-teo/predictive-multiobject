@@ -177,7 +177,6 @@ def generate_3_body_problem_dataset(dest,
                     frame[rr, cc, 0] = 1.0
 
             if occluder:
-                # TODO: check it actually occludes
                 orr, occ = circle(int(ocpos[1] * scale), int(ocpos[0] * scale),
                                 ocradius * scale, scaled_img_size)
                 frame[orr, occ] = 1.0
@@ -222,6 +221,91 @@ def generate_3_body_problem_dataset(dest,
         if n % 100 == 0:
             print(f"Generated {n} sequences out of {train_set_size}")
         mat, metadata = generate_sequence(occluder)
+        f.create_dataset(str(n), data=mat)
+        for key, value in metadata.items():
+            f[str(n)].attrs[key] = value
+
+def generate_three_body_grid(dest,
+                             side,
+                             occluder=False,
+                             img_size=None,
+                             color=True,
+                             radius=3):
+
+    # TODO simplify this and modularize functions
+
+    np.random.seed(0)
+
+    from skimage.draw import circle
+    from skimage.transform import resize
+
+    if img_size is None:
+        img_size = [30, 30]
+    scale = 10
+    scaled_img_size = [img_size[0] * scale, img_size[1] * scale]
+
+    def generate_grid(object_id, occluder=False):
+        # sample initial position of the center of mass, then sample
+        # position of each object relative to that.
+
+        # collision = True
+        # while collision == True:
+        seq = []
+        metadata = {}
+
+        lin = np.linspace(0, img_size[0], side)
+        grid = np.stack(np.meshgrid(lin, lin), -1)
+
+        if occluder:
+            ocpos = np.array(img_size) / 2
+            ocradius = 10.
+            metadata["ocradius"] = ocradius
+
+        cm_pos = np.random.rand(2)
+        cm_pos = np.array(img_size) / 2
+        angle1 = np.random.rand() * 2 * np.pi
+        angle2 = angle1 + 2 * np.pi / 3 + (np.random.rand() - 0.5) / 2
+        angle3 = angle1 + 4 * np.pi / 3 + (np.random.rand() - 0.5) / 2
+
+        angles = [angle1, angle2, angle3]
+        # calculate position of both objects
+        r = (np.random.rand() / 2 + 0.75) * img_size[0] / 4
+        poss = [
+            [np.cos(angle) * r + cm_pos[0], np.sin(angle) * r + cm_pos[1]]
+            for angle in angles]
+        poss = np.array(poss)
+
+        for i in range(side):
+            for j in range(side):
+                poss[object_id] = grid[i, j]
+
+                for j, pos in enumerate(poss):
+                    rr, cc = circle(int(pos[1] * scale), int(pos[0] * scale),
+                                    radius * scale, scaled_img_size)
+                    if color:
+                        frame[rr, cc, 2 - j] = 1.0
+                    else:
+                        frame[rr, cc, 0] = 1.0
+
+                if occluder:
+                    orr, occ = circle(
+                        int(ocpos[1] * scale),
+                        int(ocpos[0] * scale),
+                        ocradius * scale,
+                        scaled_img_size
+                    )
+                    frame[orr, occ] = 1.0
+
+                frame = resize(frame, img_size, anti_aliasing=True)
+                frame = (frame * 255).astype(np.uint8)
+
+                n = side*i + j
+                mat[n, ..., :3] = frame
+                mat[n, ..., 3:] = frame
+
+    f = f = h5py.File(dest, 'w')
+    for object_id in range(3):
+        mat, metadata = generate_grid(occluder)
         f.create_dataset(str(n), data=mat)
         for key, value in metadata.items():
             f[str(n)].attrs[key] = value

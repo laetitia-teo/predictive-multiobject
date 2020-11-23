@@ -607,6 +607,36 @@ def generate_two_sphere_dataset(dest,
         for key, value in env.get_metadata().items():
             f[str(n)].attrs[key] = value
 
+def generate_two_sphere_grid(dest,
+                             side,
+                             occluder=False):
+
+    f = h5py.File(dest, 'w')
+
+    for object_id in range(2):
+        env = TwoSphereEnv(occluder=occluder)
+        objsize = env.objects[object_id].size
+
+        lin = np.linspace(0, env.envsize - 2*objsize, side)
+        grid = np.stack(np.meshgrid(lin, lin), -1)
+
+        N = side**2
+        mat = np.zeros((N, env.L, env.L, 6))
+        t = 0.
+        env.time = t
+
+        for i in range(side):
+            for j in range(side):
+                env.objects[object_id].pos = grid[i, j]
+                env.objects[object_id].x_amp = 0.
+                env.objects[object_id].y_amp = 0.
+
+                n = side*i + j
+                mat[n, ..., :3] = env.render()
+                mat[n, ..., 3:] = env.render()
+
+        f.create_dataset(f'object_{object_id}_grid', data=mat)
+
 ### Testing environments
 
 envdict = {

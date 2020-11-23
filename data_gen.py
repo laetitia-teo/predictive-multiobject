@@ -7,8 +7,12 @@ import numpy as np
 
 from utils.utils import save_list_dict_h5py
 
-from envs.multi_object_2d.multi_object_2d import generate_two_sphere_dataset
-from envs.three_body_physics.physics_sim import generate_3_body_problem_dataset
+from envs.multi_object_2d.multi_object_2d import \
+    (generate_two_sphere_dataset,
+     generate_two_sphere_grid)
+
+from envs.three_body_physics.physics_sim import \
+    (generate_3_body_problem_dataset,)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--fname', type=str,
@@ -26,7 +30,7 @@ parser.add_argument('--task', type=str,
 parser.add_argument('--seq-len', type=int, default=40,
                     help='Length of the generated sequences.')
 parser.add_argument('--occluder', type=bool, default=False,
-                    help='whether or not to add an occluder at the center of the'
+                    help='Whether or not to add an occluder at the center of the'
                          'scene')
 
 args = parser.parse_args()
@@ -79,5 +83,12 @@ elif args.task == "three-body-physics":
         vy0_max=0.5,
         color=True,
         seed=args.seed,
+        occluder=args.occluder
+    )
+# grid test datasets
+elif args.task == 'two-sphere-grid':
+    generate_two_sphere_grid(
+        dest=args.fname + '.hdf5',
+        side=9,
         occluder=args.occluder
     )
